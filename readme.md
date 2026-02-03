@@ -20,15 +20,22 @@ graph TD
         B -->|Verify Signature| C{Post Authenticity}
     end
 
+    ```mermaid
+graph TD
+    subgraph Client_Side [Frontend: Quanchan]
+        A[Browser / SPA] -->|Hybrid TLS 1.3 Handshake| B(WASM Liboqs Module)
+        B -->|Verify Signature| C{Post Authenticity}
+    end
+
     subgraph Transport_Layer [PQC Security Layer]
-        D[Quantum-Safe-Backend] -->|Dilithium5 Signatures| A
+        D[Quantum-Safe-Backend] -->|Dilithium5 Batch Signatures| A
         D -->|Kyber768 Key Exchange| A
     end
 
     subgraph Server_Side [Data & Logic]
-        D --> E[PostgreSQL / MongoDB]
+        D --> E[(PostgreSQL / MongoDB)]
         D --> F[SHA-3 Tripcode Generator]
-        E -->|Stored Posts + Sigs| D
+        E -->|Stored Posts + Batch Sigs| D
     end
 
     style B fill:#f96,stroke:#333,stroke-width:2px
