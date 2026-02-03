@@ -14,13 +14,7 @@ A common critique of Dilithium5 is the **4.6 KB signature size**. Quanchan addre
 3. **WASM Verification:** Offloading signature verification to the client-side using WebAssembly for a lag-free UI.
 
 ### Diagram
-graph TD
-    subgraph Client_Side [Frontend: Quanchan]
-        A[Browser / SPA] -->|Hybrid TLS 1.3 Handshake| B(WASM Liboqs Module)
-        B -->|Verify Signature| C{Post Authenticity}
-    end
-
-    ```mermaid
+```mermaid
 graph TD
     subgraph Client_Side [Frontend: Quanchan]
         A[Browser / SPA] -->|Hybrid TLS 1.3 Handshake| B(WASM Liboqs Module)
@@ -41,6 +35,8 @@ graph TD
     style B fill:#f96,stroke:#333,stroke-width:2px
     style D fill:#69f,stroke:#333,stroke-width:2px
 
+
+ ```
 ## 🛠️ Tech Stack
 - **Frontend:** React / Next.js (Project Name: Quanchan)
 - **Backend:** C++ [Quantum-Safe-Backend](https://github.com/Sujithb128989/Quantum-Safe-Backend)
