@@ -1,29 +1,54 @@
+<![CDATA[<div align="center">
+
 # QuanChan
 
-QuanChan is a post-quantum-focused anonymous imageboard and messaging platform built with a React/Vite frontend, a C++ backend, and PostgreSQL. It uses ML-DSA-87 rooted browser identity, ML-KEM-1024 plus AES-256-GCM direct messaging, Dilithium5-signed thread and DM snapshots, and an OpenSSL 3.5 TLS stack that reports the latest observed handshake state at runtime.
+### Post-Quantum Anonymous Communication Platform
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19423061.svg)](https://doi.org/10.5281/zenodo.19423061)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Website](https://img.shields.io/badge/🌐_Live-quanchan.online-00C7B7?style=flat&labelColor=1a1a2e)](https://quanchan.online)
+
+[![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![OpenSSL](https://img.shields.io/badge/OpenSSL_3.5-721412?logo=openssl&logoColor=white)](https://www.openssl.org/)
+[![gRPC](https://img.shields.io/badge/gRPC-244c5a?logo=google&logoColor=white)](https://grpc.io/)
+
+---
+
+*A full-stack, post-quantum anonymous imageboard and messaging platform with browser-resident cryptographic identity, end-to-end encrypted direct messaging, and runtime transport disclosure.*
+
+[Live Platform](https://quanchan.online) · [Research Paper](https://doi.org/10.5281/zenodo.19423061) · [ResearchGate](https://www.researchgate.net/publication/403513949_QuanChan_Extending_a_Quantum-Safe_Backend_into_a_Full-Stack_Post-Quantum_Anonymous_Communication_Platform)
+
+</div>
+
+---
 
 ## What It Does
 
 QuanChan is not just an imageboard with PQC buzzwords added on top. The project pushes post-quantum mechanisms into the parts of the application that actually matter to end users:
 
-1. browser-generated ML-DSA-87 rooted identity
-2. browser-side ML-KEM-1024 + AES-256-GCM direct messages
-3. Dilithium5-signed thread and DM snapshots
-4. runtime transport disclosure through `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof`
-5. moderator and founder workflows tied to identity state rather than password accounts
+1. **Browser-generated ML-DSA-87 rooted identity** — no centralized username/password databases
+2. **Browser-side ML-KEM-1024 + AES-256-GCM direct messages** — message secrecy independent of server trust
+3. **Dilithium5-signed thread and DM snapshots** — verifiable content integrity via frontend WASM
+4. **Runtime transport disclosure** through `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof`
+5. **Identity-bound moderation** — moderator and founder workflows tied to cryptographic identity state
 
 ## Features
 
 | Area | What it does |
 | --- | --- |
-| Anonymous boards | Board, thread, and reply posting with archive support |
-| Signed content | Dilithium5-signed thread payloads and DM snapshots |
-| PQC direct messages | Browser-side `ML-KEM-1024 + AES-256-GCM` encrypted messaging |
-| Identity | Local ML-DSA-87 rooted identity with display-hash profiles |
-| Social layer | Friend requests, message requests, notifications, moderation reports |
-| Media | Uploads, image attachments, and encrypted DM image payloads |
-| Runtime transparency | `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof` |
-| Production deploy | Docker Compose deployment with fixed mounted origin certificates |
+| 🏛️ Anonymous boards | Board, thread, and reply posting with archive support |
+| 🔏 Signed content | Dilithium5-signed thread payloads and DM snapshots |
+| 🔐 PQC direct messages | Browser-side `ML-KEM-1024 + AES-256-GCM` encrypted messaging |
+| 🪪 Identity | Local ML-DSA-87 rooted identity with display-hash profiles and 12-word seed recovery |
+| 👥 Social layer | Friend requests, message requests, notifications, moderation reports |
+| 🖼️ Media | Uploads, image attachments, and encrypted DM image payloads |
+| 🔍 Runtime transparency | `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof` |
+| 🚀 Production deploy | Docker Compose deployment with fixed mounted origin certificates |
 
 ## Architecture
 
@@ -35,7 +60,7 @@ QuanChan splits responsibility across the browser, the backend, and the transpor
 4. Runtime transport status is disclosed through `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof`.
 5. In Cloudflare-backed production, edge TLS and origin TLS are treated as separate layers, so PQC transport claims come from observed runtime state rather than static config alone.
 
-### Diagram
+### System Architecture
 
 ```mermaid
 graph TD
@@ -91,39 +116,55 @@ graph LR
 
 ## Security Model
 
-- Browser-generated identity instead of password-first accounts
-- Browser-side `ML-KEM-1024 + AES-256-GCM` direct-message encryption
-- Dilithium5-signed thread responses and direct-message snapshots
-- Runtime handshake disclosure through the `X-PQC-Cipher` header and `/api/crypto/tls-proof`
-- Founder and moderator actions tied to identity state and recorded in moderation logs
-- Fixed origin certificate deployment with runtime disclosure rather than overstated transport claims
+- **Browser-generated identity** instead of password-first accounts
+- **Browser-side `ML-KEM-1024 + AES-256-GCM`** direct-message encryption
+- **Dilithium5-signed** thread responses and direct-message snapshots
+- **Runtime handshake disclosure** through the `X-PQC-Cipher` header and `/api/crypto/tls-proof`
+- **Founder and moderator actions** tied to identity state and recorded in moderation logs
+- **Fixed origin certificate deployment** with runtime disclosure rather than overstated transport claims
 
 ## Stack
 
-- Frontend: React + Vite + TypeScript
-- Backend: C++ HTTPS and gRPC server
-- Database: PostgreSQL 16
-- Crypto: OpenSSL 3.5, liboqs, Dilithium5, ML-DSA-87, ML-KEM-1024, AES-256-GCM
-- Runtime: Docker Compose
+| Layer | Technology |
+| --- | --- |
+| Frontend | React + Vite + TypeScript |
+| Backend | C++ HTTPS and gRPC server |
+| Database | PostgreSQL 16 |
+| Crypto | OpenSSL 3.5, liboqs, Dilithium5, ML-DSA-87, ML-KEM-1024, AES-256-GCM |
+| Runtime | Docker Compose |
+| Production | Cloudflare (edge TLS) + Oracle Cloud (origin) |
 
-## Papers and Research Mirrors
+## Research & Publications
 
 QuanChan continues the earlier Quantum Safe Backend work as the implemented full-stack follow-up.
 
-- Part I paper: `Quantum Safe Backend: Design and Implementation of a Post-Quantum Cryptographic Secure Storage and Communication Platform`
-- Part II paper: `QuanChan: Extending a Quantum-Safe Backend into a Full-Stack Post-Quantum Anonymous Communication Platform`
-- Part I codebase lineage: [Quantum-Safe-Backend](https://github.com/Sujithb128989/Quantum-Safe-Backend)
+| Paper | Title |
+| --- | --- |
+| **Part I** | *Quantum Safe Backend: Design and Implementation of a Post-Quantum Cryptographic Secure Storage and Communication Platform* |
+| **Part II** | *QuanChan: Extending a Quantum-Safe Backend into a Full-Stack Post-Quantum Anonymous Communication Platform* |
 
-Planned public mirrors for the current paper set:
+#### Mirrors & Archives
 
-- Zenodo archive record: pending upload
-- ResearchGate preprint page: pending upload
+| Platform | Link |
+| --- | --- |
+| 📄 Zenodo (DOI) | [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19423061.svg)](https://doi.org/10.5281/zenodo.19423061) |
+| 📚 ResearchGate | [QuanChan on ResearchGate](https://www.researchgate.net/publication/403513949_QuanChan_Extending_a_Quantum-Safe_Backend_into_a_Full-Stack_Post-Quantum_Anonymous_Communication_Platform) |
+| 🔗 Part I Codebase | [Quantum-Safe-Backend](https://github.com/Sujithb128989/Quantum-Safe-Backend) |
+| 🌐 Live Platform | [quanchan.online](https://quanchan.online) |
 
-After those uploads are live, this section should be updated with:
+#### Citation
 
-- Zenodo DOI
-- ResearchGate URL
-- preferred citation block for Part I and Part II
+```bibtex
+@article{sujith2026quanchan,
+  title     = {QuanChan: Extending a Quantum-Safe Backend into a Full-Stack
+               Post-Quantum Anonymous Communication Platform},
+  author    = {B, Sujith},
+  year      = {2026},
+  doi       = {10.5281/zenodo.19423061},
+  url       = {https://doi.org/10.5281/zenodo.19423061},
+  publisher = {Zenodo}
+}
+```
 
 ## Quick Start
 
@@ -141,12 +182,14 @@ Open:
 
 Default ports:
 
-- `8080`: HTTPS app and REST API
-- `50051`: gRPC server
-- `5432`: PostgreSQL for local development only
-- `5173`: Vite dev server when running the frontend separately
+| Port | Service |
+| --- | --- |
+| `8080` | HTTPS app and REST API |
+| `50051` | gRPC server |
+| `5432` | PostgreSQL (local dev only) |
+| `5173` | Vite dev server (frontend-only mode) |
 
-For production, do not expose PostgreSQL publicly unless you intentionally need remote database access.
+> **Note:** For production, do not expose PostgreSQL publicly unless you intentionally need remote database access.
 
 ## Production Deployment
 
@@ -159,10 +202,13 @@ Key production fields:
 
 Production certificate layout:
 
-- `/etc/quanchan/server.crt`: origin certificate presented by the container
-- `/etc/quanchan/server.key`: matching private key
-- `/etc/quanchan/ca.crt`: issuer or trust anchor used by the runtime
-- `/etc/quanchan/.env`: server-only production environment file
+```
+/etc/quanchan/
+├── server.crt    # origin certificate presented by the container
+├── server.key    # matching private key
+├── ca.crt        # issuer or trust anchor used by the runtime
+└── .env          # server-only production environment file
+```
 
 Set this up once on the server:
 
@@ -171,13 +217,6 @@ sudo mkdir -p /etc/quanchan
 sudo chown root:<deploy-user> /etc/quanchan
 sudo chmod 750 /etc/quanchan
 ```
-
-Create these files in `/etc/quanchan`:
-
-- `.env`
-- `server.crt`
-- `server.key`
-- `ca.crt`
 
 Recommended `.env` contents:
 
@@ -203,19 +242,17 @@ Cloudflare-backed production setup:
 - Cloudflare SSL/TLS mode: `Full (strict)`
 - origin TLS groups configured as `X25519MLKEM768:X25519`
 
-The deploy user must be able to read `/etc/quanchan/.env` and the certificate files, otherwise `scripts/deploy-prod.sh` will fail even if the files exist.
-
 Recommended production update flow:
-
-1. Keep your real origin certificate files and `.env` in `/etc/quanchan`.
-2. Pull the latest repo changes.
-3. Run `./scripts/deploy-prod.sh`.
-4. Verify `/health` and `/api/crypto/tls-proof`.
-
-Then deploy with:
 
 ```sh
 git pull origin main && bash scripts/deploy-prod.sh
+```
+
+Then verify:
+
+```sh
+curl -k https://localhost/health
+curl -k https://localhost/api/crypto/tls-proof
 ```
 
 ## Frontend Dev Mode
@@ -228,18 +265,21 @@ npm install
 npm run dev
 ```
 
-Frontend scripts:
-
-- `npm run dev`: local Vite dev server
-- `npm run dev:lan`: expose Vite on your LAN
-- `npm run dev:tunnel`: tunnel-based dev flow
-- `npm run build`: production build
-- `npm run preview`: preview built frontend
-- `npm run preview:lan`: preview built frontend on LAN
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Local Vite dev server |
+| `npm run dev:lan` | Expose Vite on your LAN |
+| `npm run dev:tunnel` | Tunnel-based dev flow |
+| `npm run build` | Production build |
+| `npm run preview` | Preview built frontend |
+| `npm run preview:lan` | Preview built frontend on LAN |
 
 ## Database Schema
 
-The current backend schema is broader than the original early project layout. The main implemented tables now include:
+<details>
+<summary>View full table and index listing</summary>
+
+**Tables:**
 
 - `messages`
 - `boards`
@@ -256,7 +296,7 @@ The current backend schema is broader than the original early project layout. Th
 - `bans`
 - `moderation_events`
 
-Representative indexes include:
+**Representative indexes:**
 
 - `idx_threads_board`
 - `idx_posts_thread`
@@ -274,36 +314,48 @@ Representative indexes include:
 - `idx_moderation_events_created`
 - `idx_moderation_events_actor`
 
+</details>
+
 ## API Endpoints
 
-- `GET /health`
-- `GET /api/boards`
-- `GET /api/boards/:id`
-- `GET /api/threads?board_id=<board>`
-- `GET /api/threads/:id`
-- `POST /api/threads`
-- `POST /api/posts`
-- `PATCH /api/threads/:id/archive`
-- `GET /api/profile/:hash`
-- `POST /api/profile/update`
-- `POST /api/interact`
-- `POST /api/friends/request`
-- `POST /api/friends/accept`
-- `GET /api/friends/:hash`
-- `POST /api/messages`
-- `GET /api/messages?user_hash=<hash>&peer_hash=<hash>`
-- `GET /api/messages/snapshot?user_hash=<hash>&peer_hash=<hash>`
-- `GET /api/messages/inbox/:hash`
-- `GET /api/crypto/status`
-- `GET /api/crypto/tls-proof`
-- `GET /api/stats`
-- `POST /api/upload`
-- `POST /api/store`
-- `GET /api/retrieve?id=<id>`
+<details>
+<summary>View full endpoint listing</summary>
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Health check |
+| `GET` | `/api/boards` | List all boards |
+| `GET` | `/api/boards/:id` | Get board by ID |
+| `GET` | `/api/threads?board_id=<board>` | List threads for a board |
+| `GET` | `/api/threads/:id` | Get thread by ID |
+| `POST` | `/api/threads` | Create a thread |
+| `POST` | `/api/posts` | Create a post |
+| `PATCH` | `/api/threads/:id/archive` | Archive a thread |
+| `GET` | `/api/profile/:hash` | Get profile by identity hash |
+| `POST` | `/api/profile/update` | Update profile |
+| `POST` | `/api/interact` | Record interaction |
+| `POST` | `/api/friends/request` | Send friend request |
+| `POST` | `/api/friends/accept` | Accept friend request |
+| `GET` | `/api/friends/:hash` | Get friends list |
+| `POST` | `/api/messages` | Send a direct message |
+| `GET` | `/api/messages?user_hash=<hash>&peer_hash=<hash>` | Get DM conversation |
+| `GET` | `/api/messages/snapshot?user_hash=<hash>&peer_hash=<hash>` | Get signed DM snapshot |
+| `GET` | `/api/messages/inbox/:hash` | Get DM inbox |
+| `GET` | `/api/crypto/status` | Crypto algorithm status |
+| `GET` | `/api/crypto/tls-proof` | TLS handshake proof |
+| `GET` | `/api/stats` | Platform statistics |
+| `POST` | `/api/upload` | Upload a file |
+| `POST` | `/api/store` | Store encrypted data |
+| `GET` | `/api/retrieve?id=<id>` | Retrieve stored data |
+
+</details>
 
 ## Testing and Runtime Evidence
 
-The fuller testing write-up lives in [testing.md](./testing.md). This section keeps the captured evidence close to the project overview so build status, runtime health, and crypto disclosure can be checked quickly.
+The fuller testing write-up lives in [testing.md](./testing.md).
+
+<details>
+<summary>View captured evidence</summary>
 
 ### Frontend build verification
 
@@ -341,15 +393,28 @@ The live `/api/crypto/tls-proof` output shows the latest observed TLS handshake 
 
 ![TLS proof output](./images/testing/tls-proof-output.png)
 
+</details>
+
 ## Credits and Acknowledgments
 
-- Research, system design, and implementation: Sujith
-- Project lineage: QuanChan builds directly on the earlier Quantum Safe Backend paper and repository
-- Core open-source building blocks: React, Vite, TypeScript, PostgreSQL, gRPC, `cpp-httplib`, OpenSSL 3.5, and `liboqs`
-- Standards foundation: NIST post-quantum standardization work for ML-KEM and ML-DSA
-- Deployment and interoperability reference points: Cloudflare PQC and origin-TLS documentation
-- Testing and verification support: runtime crypto disclosure endpoints, Docker-based deployment, and the evidence captured in [testing.md](./testing.md)
+- **Research, system design, and implementation:** Sujith
+- **Project lineage:** QuanChan builds directly on the earlier [Quantum Safe Backend](https://github.com/Sujithb128989/Quantum-Safe-Backend) paper and repository
+- **Core open-source building blocks:** React, Vite, TypeScript, PostgreSQL, gRPC, `cpp-httplib`, OpenSSL 3.5, and `liboqs`
+- **Standards foundation:** NIST post-quantum standardization work for ML-KEM and ML-DSA
+- **Deployment and interoperability:** Cloudflare PQC and origin-TLS documentation
+- **Testing and verification:** Runtime crypto disclosure endpoints, Docker-based deployment, and the evidence captured in [testing.md](./testing.md)
 
 ## License
 
 This project is licensed under the Apache License 2.0. See [LICENSE](./LICENSE).
+
+---
+
+<div align="center">
+
+**[quanchan.online](https://quanchan.online)**
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19423061.svg)](https://doi.org/10.5281/zenodo.19423061)
+
+</div>
+]]>
