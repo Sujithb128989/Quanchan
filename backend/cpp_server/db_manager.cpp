@@ -217,6 +217,7 @@ DBManager::~DBManager() {
 // =============================================================================
 
 void DBManager::Reconnect() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (conn_) {
         PQfinish(conn_);
         conn_ = nullptr;
@@ -237,12 +238,14 @@ void DBManager::Reconnect() {
 }
 
 void DBManager::EnsureConnected() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
         Reconnect();
     }
 }
 
 void DBManager::Execute(const std::string& sql) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (int attempt = 0; attempt < 2; ++attempt) {
         EnsureConnected();
 
@@ -263,6 +266,7 @@ void DBManager::Execute(const std::string& sql) {
 }
 
 PGresultPtr DBManager::Query(const std::string& sql) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (int attempt = 0; attempt < 2; ++attempt) {
         EnsureConnected();
 
@@ -286,6 +290,7 @@ PGresultPtr DBManager::Query(const std::string& sql) {
 
 PGresultPtr DBManager::QueryParams(const std::string& sql,
                                     const std::vector<std::string>& params) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (int attempt = 0; attempt < 2; ++attempt) {
         EnsureConnected();
 
@@ -616,7 +621,7 @@ void DBManager::Init() {
 // =============================================================================
 
 int64_t DBManager::InsertMessage(const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string encrypted = secure_storage_.Encrypt(message);
 
@@ -637,7 +642,7 @@ int64_t DBManager::InsertMessage(const std::string& message) {
 }
 
 std::string DBManager::GetMessage(int64_t id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string id_str = std::to_string(id);
     PGresultPtr res = QueryParams(
@@ -667,7 +672,7 @@ std::string DBManager::GetMessage(int64_t id) {
 }
 
 void DBManager::ReEncryptAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     Logger::Info("Starting database re-encryption...");
 
     // 1. Read all data
@@ -762,7 +767,7 @@ std::string DBManager::GetBoardIdForThread(int64_t thread_id) {
 // =============================================================================
 
 json DBManager::GetAllBoards() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     json boards = json::array();
 
     PGresultPtr res = Query(
@@ -787,7 +792,7 @@ json DBManager::GetAllBoards() {
 }
 
 json DBManager::GetBoard(const std::string& board_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     json board;
 
     PGresultPtr res = QueryParams(
@@ -813,7 +818,7 @@ json DBManager::GetBoard(const std::string& board_id) {
 // =============================================================================
 
 json DBManager::GetThreads(const std::string& board_id, int page, int limit, bool archived) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     json result;
     json threads = json::array();
 
@@ -883,7 +888,7 @@ json DBManager::GetThreads(const std::string& board_id, int page, int limit, boo
 }
 
 json DBManager::GetThread(int64_t thread_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     json result;
 
     std::string tid = std::to_string(thread_id);
@@ -942,7 +947,7 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
                              const std::string& content, const std::string& name,
                              const std::string& image_url, const std::string& encrypted_content,
                              const std::string& author_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const std::string author = ResolveExistingProfileHash(author_hash);
     std::string ban_reason;
     if (!author.empty() && IsProfileBanned(author, &ban_reason)) {
@@ -1007,7 +1012,7 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
 }
 
 void DBManager::ArchiveThread(int64_t thread_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string tid = std::to_string(thread_id);
     QueryParams("UPDATE threads SET archived = TRUE WHERE id = $1", {tid});
 }
@@ -1020,7 +1025,7 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
                            const std::string& name, const std::string& image_url,
                            const std::string& encrypted_content, bool sage,
                            const std::string& author_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string bid = GetBoardIdForThread(thread_id);
     if (bid.empty()) throw std::runtime_error("Thread not found");
@@ -1085,7 +1090,7 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
 // =============================================================================
 
 json DBManager::GetStats() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     json result;
 
     auto count = [&](const std::string& table) -> int {
@@ -1210,7 +1215,7 @@ void DBManager::UpdateProfile(const std::string& pub_key_hash, const std::string
                              const std::string& recovery_lookup_hash,
                              const std::string& recovery_bundle_ciphertext,
                              const std::string& recovery_bundle_iv) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string normalized_username = "";
     if (!username.empty()) {
@@ -1277,7 +1282,7 @@ void DBManager::UpdateProfile(const std::string& pub_key_hash, const std::string
 }
 
 json DBManager::GetRecoveryBundle(const std::string& recovery_lookup_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string trimmed_lookup = TrimCopy(recovery_lookup_hash);
     if (trimmed_lookup.empty()) {
@@ -1308,7 +1313,7 @@ json DBManager::GetRecoveryBundle(const std::string& recovery_lookup_hash) {
 }
 
 json DBManager::ClaimFounderRole(const std::string& pub_key_hash, const std::string& founder_session_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string resolved_hash = ResolveProfileHash(pub_key_hash);
     if (resolved_hash.empty()) {
@@ -1353,7 +1358,7 @@ json DBManager::ClaimFounderRole(const std::string& pub_key_hash, const std::str
 
 json DBManager::SetProfileRole(const std::string& actor_hash, const std::string& founder_session_hash,
                                const std::string& target_hash, const std::string& role) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string target = ResolveProfileHash(target_hash);
@@ -1466,7 +1471,7 @@ json DBManager::InteractPost(int64_t post_id, const std::string& pub_key_hash, i
 }
 
 json DBManager::SendFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1525,7 +1530,7 @@ json DBManager::SendFriendRequest(const std::string& sender_hash, const std::str
 }
 
 json DBManager::AcceptFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1553,7 +1558,7 @@ json DBManager::AcceptFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::RejectFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1580,7 +1585,7 @@ json DBManager::RejectFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::CancelFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1596,7 +1601,7 @@ json DBManager::CancelFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::RemoveFriend(const std::string& user_hash, const std::string& peer_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     const std::string peer = ResolveExistingProfileHash(peer_hash);
@@ -1613,7 +1618,7 @@ json DBManager::RemoveFriend(const std::string& user_hash, const std::string& pe
 }
 
 json DBManager::GetFriends(const std::string& pub_key_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string resolved_hash = ResolveExistingProfileHash(pub_key_hash);
     if (resolved_hash.empty()) {
@@ -1679,7 +1684,7 @@ json DBManager::GetFriends(const std::string& pub_key_hash) {
 }
 
 json DBManager::BlockUser(const std::string& blocker_hash, const std::string& blocked_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string blocker = ResolveExistingProfileHash(blocker_hash);
     const std::string blocked = ResolveExistingProfileHash(blocked_hash);
@@ -1714,7 +1719,7 @@ json DBManager::BlockUser(const std::string& blocker_hash, const std::string& bl
 }
 
 json DBManager::UnblockUser(const std::string& blocker_hash, const std::string& blocked_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string blocker = ResolveExistingProfileHash(blocker_hash);
     const std::string blocked = ResolveExistingProfileHash(blocked_hash);
@@ -1737,7 +1742,7 @@ json DBManager::UnblockUser(const std::string& blocker_hash, const std::string& 
 
 json DBManager::CreateDirectMessage(const std::string& sender_hash, const std::string& receiver_hash,
                                     const std::string& content, const std::string& image_url) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string sender = ResolveExistingProfileHash(sender_hash, true);
     std::string receiver = ResolveExistingProfileHash(receiver_hash, true);
@@ -1837,7 +1842,7 @@ json DBManager::CreateDirectMessage(const std::string& sender_hash, const std::s
 }
 
 json DBManager::GetDirectMessages(const std::string& user_hash, const std::string& peer_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string me = ResolveExistingProfileHash(user_hash, true);
     std::string peer = ResolveExistingProfileHash(peer_hash, true);
@@ -1906,7 +1911,7 @@ json DBManager::GetDirectMessages(const std::string& user_hash, const std::strin
 }
 
 json DBManager::GetDirectMessageInbox(const std::string& user_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     std::string me = ResolveExistingProfileHash(user_hash, true);
     if (me.empty()) {
@@ -2040,7 +2045,7 @@ json DBManager::RespondToMessageRequest(const std::string& actor_hash, const std
         return BlockUser(actor_hash, requester_hash);
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveExistingProfileHash(actor_hash);
     const std::string requester = ResolveExistingProfileHash(requester_hash);
@@ -2094,7 +2099,7 @@ json DBManager::RespondToMessageRequest(const std::string& actor_hash, const std
 }
 
 json DBManager::GetNotifications(const std::string& user_hash, int limit) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2129,7 +2134,7 @@ json DBManager::GetNotifications(const std::string& user_hash, int limit) {
 }
 
 json DBManager::MarkNotificationsRead(const std::string& user_hash, const std::string& notification_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2152,7 +2157,7 @@ json DBManager::MarkNotificationsRead(const std::string& user_hash, const std::s
 }
 
 json DBManager::GetNotificationSummary(const std::string& user_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2212,7 +2217,7 @@ json DBManager::CreateReport(const std::string& reporter_hash, const std::string
                              const std::string& target_kind, int64_t target_post_id, int64_t target_thread_id,
                              const std::string& target_board_id, const std::string& target_display_name,
                              const std::string& context_link) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string reporter = ResolveExistingProfileHash(reporter_hash);
     const std::string normalized_kind = TrimCopy(target_kind).empty() ? "user" : TrimCopy(target_kind);
@@ -2314,7 +2319,7 @@ json DBManager::CreateReport(const std::string& reporter_hash, const std::string
 }
 
 json DBManager::GetModerationReports(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
@@ -2365,7 +2370,7 @@ json DBManager::GetModerationReports(const std::string& actor_hash, const std::s
 }
 
 json DBManager::GetModerationAudit(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
@@ -2424,7 +2429,7 @@ json DBManager::GetModerationAudit(const std::string& actor_hash, const std::str
 
 json DBManager::ResolveModerationReport(const std::string& actor_hash, const std::string& founder_session_hash,
                                         int64_t report_id, const std::string& status, const std::string& note) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string normalized_status = TrimCopy(status);
@@ -2487,7 +2492,7 @@ json DBManager::ResolveModerationReport(const std::string& actor_hash, const std
 
 json DBManager::BanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_hash,
                                    const std::string& target_hash, const std::string& reason) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string target = ResolveExistingProfileHash(target_hash);
@@ -2530,7 +2535,7 @@ json DBManager::BanUserAsModerator(const std::string& actor_hash, const std::str
 
 json DBManager::UnbanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_hash,
                                      const std::string& target_hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string target = ResolveExistingProfileHash(target_hash);
@@ -2552,7 +2557,7 @@ json DBManager::UnbanUserAsModerator(const std::string& actor_hash, const std::s
 }
 
 json DBManager::DeletePostAsModerator(const std::string& actor_hash, const std::string& founder_session_hash, int64_t post_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {

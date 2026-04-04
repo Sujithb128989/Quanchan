@@ -113,7 +113,7 @@ private:
     PGconn* conn_;
     std::string conn_info_;
     SecureStorage& secure_storage_;
-    std::mutex mutex_;
+    std::recursive_mutex mutex_;
 
     void Init();
     void EnsureConnected();
