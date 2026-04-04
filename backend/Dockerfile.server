@@ -1,0 +1,134 @@
+ARG OPENSSL_VERSION=3.5.5
+
+FROM debian:bookworm-slim AS builder
+
+ARG OPENSSL_VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      git \
+      ninja-build \
+      pkg-config \
+      libpq-dev \
+      libc-ares-dev \
+      zlib1g-dev \
+      libcurl4-openssl-dev \
+      libsqlite3-dev \
+      nlohmann-json3-dev \
+      protobuf-compiler \
+      wget \
+      perl \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" -O /tmp/openssl.tar.gz \
+    && tar -xzf /tmp/openssl.tar.gz -C /tmp \
+    && cd /tmp/openssl-${OPENSSL_VERSION} \
+    && ./Configure linux-x86_64 shared zlib \
+         --prefix=/opt/openssl \
+         --openssldir=/opt/openssl \
+    && make -j$(nproc) \
+    && make install_sw install_ssldirs \
+    && rm -rf /tmp/openssl*
+
+ENV PATH="/opt/openssl/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/openssl/lib64:/opt/openssl/lib:/usr/local/lib"
+ENV PKG_CONFIG_PATH="/opt/openssl/lib64/pkgconfig:/opt/openssl/lib/pkgconfig"
+
+RUN git clone --branch 0.10.1 --single-branch --depth 1 \
+        https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs \
+    && cd /tmp/liboqs \
+    && mkdir build && cd build \
+    && cmake .. -GNinja \
+         -DCMAKE_INSTALL_PREFIX=/usr/local \
+         -DBUILD_SHARED_LIBS=ON \
+         -DOQS_BUILD_ONLY_LIB=ON \
+         -DOQS_USE_OPENSSL=OFF \
+         -DCMAKE_BUILD_TYPE=Release \
+    && ninja -j$(nproc) \
+    && ninja install \
+    && ldconfig \
+    && rm -rf /tmp/liboqs
+
+RUN git clone --recurse-submodules -b v1.62.1 --depth 1 \
+        https://github.com/grpc/grpc /tmp/grpc \
+    && cd /tmp/grpc && mkdir build && cd build \
+    && cmake .. \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DCMAKE_INSTALL_PREFIX=/usr/local \
+         -DOPENSSL_ROOT_DIR=/opt/openssl \
+         -DgRPC_INSTALL=ON \
+         -DgRPC_BUILD_TESTS=OFF \
+         -DBUILD_SHARED_LIBS=ON \
+         -DgRPC_SSL_PROVIDER=package \
+         -DgRPC_ABSL_PROVIDER=module \
+         -DgRPC_RE2_PROVIDER=module \
+         -DgRPC_CARES_PROVIDER=package \
+         -DgRPC_ZLIB_PROVIDER=package \
+         -DgRPC_PROTOBUF_PROVIDER=module \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/grpc
+
+RUN wget -qO /usr/local/include/httplib.h \
+    https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.15.3/httplib.h
+
+WORKDIR /build
+COPY ./cpp_server ./cpp_server
+COPY ./proto ./proto
+
+WORKDIR /build/cpp_server
+RUN cmake . \
+      -DCMAKE_PREFIX_PATH="/usr/local;/opt/openssl" \
+      -DOPENSSL_ROOT_DIR=/opt/openssl \
+      -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) VERBOSE=1
+
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libpq5 \
+      ca-certificates \
+      libc-ares2 \
+      libcurl4 \
+      libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/cpp_server/pqc_server /app/pqc_server
+COPY --from=builder /opt/openssl /opt/openssl
+COPY --from=builder /usr/local/lib/liboqs* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libgrpc* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libprotobuf* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libgpr* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libupb* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libaddress_sorting* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libre2* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libabsl* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libutf8* /usr/local/lib/
+
+COPY ./certs /app/certs
+COPY ./scripts /app/scripts
+COPY ./openssl.cnf /app/openssl.cnf
+COPY ./www /app/www
+
+RUN printf "/opt/openssl/lib64\n/opt/openssl/lib\n/usr/local/lib\n" > /etc/ld.so.conf.d/pqc.conf \
+    && ln -sf /opt/openssl/bin/openssl /usr/local/bin/openssl \
+    && chmod +x /app/scripts/*.sh \
+    && ldconfig
+
+ENV PATH="/opt/openssl/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/openssl/lib64:/opt/openssl/lib:/usr/local/lib"
+ENV OPENSSL_MODULES="/opt/openssl/lib64/ossl-modules"
+ENV OPENSSL_CONF="/app/openssl.cnf"
+ENV CERT_SAN_LIST="localhost,127.0.0.1"
+
+RUN mkdir -p /app/data /app/uploads
+
+WORKDIR /app
+EXPOSE 50051 8080
+ENTRYPOINT ["/app/scripts/start_server.sh"]

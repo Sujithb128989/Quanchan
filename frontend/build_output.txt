@@ -1,0 +1,13 @@
+src/components/three/QuantumEncryptionScene.tsx(1,27): error TS6133: 'useState' is declared but its value is never read.
+src/components/three/QuantumEncryptionScene.tsx(1,37): error TS6133: 'useEffect' is declared but its value is never read.
+src/components/three/QuantumEncryptionScene.tsx(98,15): error TS2322: Type 'Ref<Line<BufferGeometry<NormalBufferAttributes, BufferGeometryEventMap>, Material | Material[], Object3DEventMap>>' is not assignable to type 'Ref<SVGLineElement> | undefined'.
+  Type 'RefObject<Line<BufferGeometry<NormalBufferAttributes, BufferGeometryEventMap>, Material | Material[], Object3DEventMap> | null>' is not assignable to type 'Ref<SVGLineElement> | undefined'.
+    Type 'RefObject<Line<BufferGeometry<NormalBufferAttributes, BufferGeometryEventMap>, Material | Material[], Object3DEventMap> | null>' is not assignable to type 'RefObject<SVGLineElement | null>'.
+      Type 'Line<BufferGeometry<NormalBufferAttributes, BufferGeometryEventMap>, Material | Material[], Object3DEventMap> | null' is not assignable to type 'SVGLineElement | null'.
+        Type 'Line<BufferGeometry<NormalBufferAttributes, BufferGeometryEventMap>, Material | Material[], Object3DEventMap>' is missing the following properties from type 'SVGLineElement': x1, x2, y1, y2, and 296 more.
+src/components/three/QuantumEncryptionScene.tsx(100,18): error TS2741: Property 'args' is missing in type '{ attach: string; count: number; array: Float32Array<ArrayBuffer>; itemSize: number; }' but required in type 'Mutable<Overwrite<Partial<Overwrite<BufferAttribute, MathProps<BufferAttribute> & ReactProps<BufferAttribute>>>, Omit<...>>>'.
+src/components/three/QuantumEncryptionScene.tsx(108,24): error TS6133: 'gateType' is declared but its value is never read.
+src/components/three/QuantumEncryptionScene.tsx(236,18): error TS2741: Property 'args' is missing in type '{ attach: string; count: number; array: Float32Array<ArrayBuffer>; itemSize: number; }' but required in type 'Mutable<Overwrite<Partial<Overwrite<BufferAttribute, MathProps<BufferAttribute> & ReactProps<BufferAttribute>>>, Omit<...>>>'.
+src/components/three/QuantumEncryptionScene.tsx(237,18): error TS2741: Property 'args' is missing in type '{ attach: string; count: number; array: Float32Array<ArrayBuffer>; itemSize: number; }' but required in type 'Mutable<Overwrite<Partial<Overwrite<BufferAttribute, MathProps<BufferAttribute> & ReactProps<BufferAttribute>>>, Omit<...>>>'.
+src/pages/ProfilePage.tsx(1,8): error TS6133: 'React' is declared but its value is never read.
+src/pages/ProfilePage.tsx(6,44): error TS6133: 'Heart' is declared but its value is never read.

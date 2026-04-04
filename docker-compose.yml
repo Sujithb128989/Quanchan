@@ -1,0 +1,51 @@
+# ==============================================================================
+# QuanChan — Docker Compose (Production)
+# ==============================================================================
+
+services:
+  # ── PostgreSQL Database ────────────────────────────────────────────────────
+  db:
+    image: postgres:16
+    container_name: quanchan-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quanchan
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-quanchan_pqc_2026}
+      POSTGRES_DB: quanchan
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quanchan -d quanchan"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── C++ PQC Backend ────────────────────────────────────────────────────────
+  pqc-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quanchan-pqc-backend
+    restart: unless-stopped
+    ports:
+      - "${HTTPS_PORT:-8080}:8080"
+      - "${GRPC_PORT:-50051}:50051"
+    environment:
+      PG_CONN_STRING: "host=db port=5432 dbname=quanchan user=quanchan password=${PG_PASSWORD:-quanchan_pqc_2026}"
+    volumes:
+      # Application config (read-only)
+      - ./config.json:/app/config.json:ro
+      # Fixed production TLS material mounted from a server-only directory
+      - ${QUANCHAN_CERTS_DIR:-./backend/certs}:/app/certs:ro
+      # Persist dilithium5.key and AES storage key across container rebuilds
+      - ./data:/app/data
+      # Persist uploaded files
+      - ./uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
