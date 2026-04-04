@@ -55,6 +55,10 @@ export default function ModerationPage() {
     }, [identity.identity?.displayHash, viewerRole, founderTokenVersion]);
 
     useEffect(() => {
+        if (identity.loading) {
+            return;
+        }
+
         if (!identity.identity?.displayHash) {
             setViewerRole('user');
             setRoleState('ready');
@@ -85,7 +89,7 @@ export default function ModerationPage() {
         return () => {
             cancelled = true;
         };
-    }, [identity.identity?.displayHash, founderTokenVersion]);
+    }, [identity.identity?.displayHash, identity.loading, founderTokenVersion]);
 
     useEffect(() => {
         const onRoleUpdate = (event: Event) => {
@@ -124,16 +128,16 @@ export default function ModerationPage() {
         }
     }
 
-    if (!identity.identity?.displayHash) {
-        return <Navigate to="/directory" replace />;
-    }
-
-    if (roleState === 'loading') {
+    if (identity.loading || roleState === 'loading') {
         return (
             <div style={{ padding: '20px', maxWidth: '980px', margin: '0 auto 120px' }}>
                 <div className="flat-card" style={{ minHeight: '220px' }} />
             </div>
         );
+    }
+
+    if (!identity.identity?.displayHash) {
+        return <Navigate to="/directory" replace />;
     }
 
     if (viewerRole === 'user') {
