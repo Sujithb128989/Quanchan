@@ -64,20 +64,20 @@ QuanChan splits responsibility across the browser, the backend, and the transpor
 
 ```mermaid
 graph TD
-    subgraph Client["Browser / React SPA"]
+    subgraph Client [Browser / React SPA]
         A["Local ML-DSA-87 identity"]
         B["Local ML-KEM-1024 DM keys"]
         C["WASM / client verification"]
     end
 
-    subgraph Transport["TLS Path"]
+    subgraph Transport [TLS Path]
         D["HTTPS gateway"]
         E["TLS 1.3 policy"]
         F["Hybrid group: X25519MLKEM768"]
         G["Production origin certificate"]
     end
 
-    subgraph Backend["C++ backend"]
+    subgraph Backend [C++ backend]
         H["Dilithium5 snapshot signer"]
         I["REST API"]
         J["gRPC service"]
