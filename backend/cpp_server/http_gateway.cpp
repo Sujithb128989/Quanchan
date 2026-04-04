@@ -47,6 +47,89 @@ static std::string get_extension(const std::string& filename) {
     return (pos == std::string::npos) ? "" : filename.substr(pos);
 }
 
+static std::string extension_from_content_type(const std::string& content_type) {
+    std::string lowered = content_type;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    if (lowered == "image/png") return ".png";
+    if (lowered == "image/jpeg" || lowered == "image/jpg" || lowered == "image/pjpeg") return ".jpg";
+    if (lowered == "image/webp") return ".webp";
+    if (lowered == "image/gif") return ".gif";
+    if (lowered == "image/bmp") return ".bmp";
+    if (lowered == "image/svg+xml") return ".svg";
+    if (lowered == "video/mp4") return ".mp4";
+    if (lowered == "video/webm") return ".webm";
+    if (lowered == "video/quicktime") return ".mov";
+    return "";
+}
+
+static std::string extension_from_magic_bytes(const std::string& data) {
+    if (data.size() >= 8 &&
+        static_cast<uint8_t>(data[0]) == 0x89 &&
+        data[1] == 'P' && data[2] == 'N' && data[3] == 'G' &&
+        static_cast<uint8_t>(data[4]) == 0x0D &&
+        static_cast<uint8_t>(data[5]) == 0x0A &&
+        static_cast<uint8_t>(data[6]) == 0x1A &&
+        static_cast<uint8_t>(data[7]) == 0x0A) {
+        return ".png";
+    }
+
+    if (data.size() >= 3 &&
+        static_cast<uint8_t>(data[0]) == 0xFF &&
+        static_cast<uint8_t>(data[1]) == 0xD8 &&
+        static_cast<uint8_t>(data[2]) == 0xFF) {
+        return ".jpg";
+    }
+
+    if (data.size() >= 12 &&
+        data.compare(0, 4, "RIFF") == 0 &&
+        data.compare(8, 4, "WEBP") == 0) {
+        return ".webp";
+    }
+
+    if (data.size() >= 6 &&
+        (data.compare(0, 6, "GIF87a") == 0 || data.compare(0, 6, "GIF89a") == 0)) {
+        return ".gif";
+    }
+
+    if (data.size() >= 2 &&
+        data[0] == 'B' && data[1] == 'M') {
+        return ".bmp";
+    }
+
+    if (data.size() >= 12 && data.compare(4, 4, "ftyp") == 0) {
+        return ".mp4";
+    }
+
+    return "";
+}
+
+static std::string normalized_upload_extension(const std::string& filename,
+                                               const std::string& content_type,
+                                               const std::string& content) {
+    std::string ext = get_extension(filename);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    if (ext == ".jpeg" || ext == ".jfif" || ext == ".pjpeg") {
+        return ".jpg";
+    }
+
+    if (!ext.empty()) {
+        return ext;
+    }
+
+    ext = extension_from_content_type(content_type);
+    if (!ext.empty()) {
+        return ext;
+    }
+
+    return extension_from_magic_bytes(content);
+}
+
 // Base64 encode using OpenSSL EVP (no external dependency)
 static std::string base64_encode(const uint8_t* data, size_t len) {
     size_t out_len = 4 * ((len + 2) / 3) + 1;
@@ -382,6 +465,10 @@ void RunHTTPServer(DBManager& db_manager, int port,
         Logger::Fatal("HTTPS gateway failed to load TLS certificate/key material.");
         std::exit(EXIT_FAILURE);
     }
+    const unsigned int hardware_threads = std::max(4u, std::thread::hardware_concurrency());
+    const size_t worker_count = std::min<size_t>(std::max<size_t>(hardware_threads * 2, 8), 64);
+    svr.new_task_queue = [worker_count] { return new httplib::ThreadPool(static_cast<int>(worker_count)); };
+    Logger::Info("Configured HTTPS worker pool with " + std::to_string(worker_count) + " threads.");
     const json cert_info = read_certificate_facts(cert_file);
     const bool pqc_certificate_detected = certificate_uses_pqc_keys(cert_info);
 
@@ -1310,12 +1397,12 @@ void RunHTTPServer(DBManager& db_manager, int port,
                     return db_manager.GetDirectMessages(user, peer);
                 },
                 [&](const json& state, const std::string&, bool changed) {
-                    return json{
-                        {"changed", changed},
-                        {"peerHash", state.value("peerHash", peer)},
-                        {"channelStatus", state.value("channelStatus", "unknown")},
-                        {"messageCount", state.contains("messages") && state["messages"].is_array() ? state["messages"].size() : 0}
-                    };
+                    json payload = state;
+                    payload["changed"] = changed;
+                    payload["peerHash"] = state.value("peerHash", peer);
+                    payload["channelStatus"] = state.value("channelStatus", "unknown");
+                    payload["messageCount"] = state.contains("messages") && state["messages"].is_array() ? state["messages"].size() : 0;
+                    return payload;
                 }
             );
         } catch (const std::exception& e) {
@@ -1368,13 +1455,12 @@ void RunHTTPServer(DBManager& db_manager, int port,
         try {
             if (!req.has_file("file")) { res.status = 400; res.set_content("{\"error\":\"No file\"}", "application/json"); return; }
             const auto& file = req.get_file_value("file");
-            std::string new_name = random_hex(16) + get_extension(file.filename);
+            std::string file_data = file.content;
+            std::string ext = normalized_upload_extension(file.filename, file.content_type, file_data);
+            std::string new_name = random_hex(16) + ext;
             std::string path = "/app/uploads/" + new_name;
 
             // EXIF stripping for JPEG files (privacy: remove GPS, camera model, etc.)
-            std::string file_data = file.content;
-            std::string ext = get_extension(file.filename);
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".jpg" || ext == ".jpeg") {
                 // Scan for and remove all APP1 (EXIF) markers: 0xFF 0xE1
                 std::string stripped;

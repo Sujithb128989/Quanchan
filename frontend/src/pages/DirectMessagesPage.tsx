@@ -304,6 +304,27 @@ export default function DirectMessagesPage() {
         }
     }, [decodeMessages, dilithiumReady, isPhone, myHash, navigate, verifySignature]);
 
+    const applyLiveConversationPayload = useCallback(async (payload: Record<string, unknown>, peerValue: string) => {
+        const resolvedPeer = payload.peerHash ? String(payload.peerHash) : peerValue;
+        setChannelStatus(String(payload.channelStatus || 'unknown') as typeof channelStatus);
+
+        const incoming = Array.isArray(payload.messages)
+            ? payload.messages.map((entry: Record<string, unknown>) => mapMessage(entry))
+            : [];
+        const decryptedMessages = await decodeMessages(incoming);
+
+        if (resolvedPeer !== peerValue) {
+            setActiveHash(resolvedPeer);
+            if (isPhone) {
+                navigate(`/dm/${encodeURIComponent(resolvedPeer)}`, { replace: true });
+            }
+        }
+
+        setSnapshotVerified(null);
+        setMessages(decryptedMessages);
+        setContacts(prev => mergeContacts(prev, [], resolvedPeer));
+    }, [decodeMessages, isPhone, navigate]);
+
     const postDirectMessage = useCallback(async (
         senderHash: string,
         receiverHash: string,
@@ -411,10 +432,11 @@ export default function DirectMessagesPage() {
             `/api/live/messages/conversation?user_hash=${encodeURIComponent(myHash)}&peer_hash=${encodeURIComponent(selectedHash)}`,
             {
                 onUpdate: payload => {
-                    if (payload.channelStatus) {
-                        setChannelStatus(String(payload.channelStatus) as typeof channelStatus);
-                    }
-                    fetchConversation(selectedHash).catch(err => console.error('Failed to refresh live conversation:', err));
+                    applyLiveConversationPayload(payload as Record<string, unknown>, selectedHash)
+                        .catch(err => {
+                            console.error('Failed to apply live conversation payload:', err);
+                            fetchConversation(selectedHash).catch(fetchErr => console.error('Failed to refresh live conversation:', fetchErr));
+                        });
                 },
                 onError: () => {
                     fetchConversation(selectedHash).catch(err => console.error('Failed to refresh conversation fallback:', err));
@@ -425,7 +447,7 @@ export default function DirectMessagesPage() {
         return () => {
             unsubscribe?.();
         };
-    }, [fetchConversation, myHash, selectedHash]);
+    }, [applyLiveConversationPayload, fetchConversation, myHash, selectedHash]);
 
     function openConversation(hash: string, label?: string) {
         setActiveHash(hash);
