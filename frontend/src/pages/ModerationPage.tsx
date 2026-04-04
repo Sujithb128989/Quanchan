@@ -18,11 +18,19 @@ export default function ModerationPage() {
     const [error, setError] = useState('');
     const [busyId, setBusyId] = useState<number | null>(null);
     const [viewerRole, setViewerRole] = useState<'user' | 'moderator' | 'founder'>(() => normalizeProfileRole(localStorage.getItem('quanchan_self_role') || undefined));
+    const [roleState, setRoleState] = useState<'loading' | 'ready'>('loading');
+    const [founderTokenVersion, setFounderTokenVersion] = useState(0);
     const founderToken = getFounderToken();
 
     async function loadReports() {
         if (!identity.identity?.displayHash) {
             setReports([]);
+            setLoading(false);
+            return;
+        }
+        if (viewerRole === 'user') {
+            setReports([]);
+            setAuditEvents([]);
             setLoading(false);
             return;
         }
@@ -44,16 +52,57 @@ export default function ModerationPage() {
 
     useEffect(() => {
         loadReports().catch(err => console.error('Moderation queue failed:', err));
-    }, [identity.identity?.displayHash]);
+    }, [identity.identity?.displayHash, viewerRole, founderTokenVersion]);
+
+    useEffect(() => {
+        if (!identity.identity?.displayHash) {
+            setViewerRole('user');
+            setRoleState('ready');
+            return;
+        }
+
+        let cancelled = false;
+        setRoleState('loading');
+
+        fetch(`/api/profile/${encodeURIComponent(identity.identity.displayHash)}`)
+            .then(res => res.ok ? res.json() : null)
+            .then(profile => {
+                if (cancelled) return;
+                const normalizedRole = normalizeProfileRole(profile?.role);
+                setViewerRole(normalizedRole);
+                localStorage.setItem('quanchan_self_role', normalizedRole);
+                window.dispatchEvent(new CustomEvent('quanchan:self-role', { detail: { role: normalizedRole } }));
+                setRoleState('ready');
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setViewerRole('user');
+                localStorage.setItem('quanchan_self_role', 'user');
+                window.dispatchEvent(new CustomEvent('quanchan:self-role', { detail: { role: 'user' } }));
+                setRoleState('ready');
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [identity.identity?.displayHash, founderTokenVersion]);
 
     useEffect(() => {
         const onRoleUpdate = (event: Event) => {
             const role = (event as CustomEvent<{ role?: string }>).detail?.role;
             setViewerRole(normalizeProfileRole(role));
+            setRoleState('ready');
+        };
+        const onFounderTokenUpdate = () => {
+            setFounderTokenVersion(version => version + 1);
         };
 
         window.addEventListener('quanchan:self-role', onRoleUpdate as EventListener);
-        return () => window.removeEventListener('quanchan:self-role', onRoleUpdate as EventListener);
+        window.addEventListener('quanchan:founder-token', onFounderTokenUpdate as EventListener);
+        return () => {
+            window.removeEventListener('quanchan:self-role', onRoleUpdate as EventListener);
+            window.removeEventListener('quanchan:founder-token', onFounderTokenUpdate as EventListener);
+        };
     }, []);
 
     const openCount = useMemo(
@@ -75,7 +124,19 @@ export default function ModerationPage() {
         }
     }
 
-    if (!identity.identity?.displayHash || viewerRole === 'user') {
+    if (!identity.identity?.displayHash) {
+        return <Navigate to="/directory" replace />;
+    }
+
+    if (roleState === 'loading') {
+        return (
+            <div style={{ padding: '20px', maxWidth: '980px', margin: '0 auto 120px' }}>
+                <div className="flat-card" style={{ minHeight: '220px' }} />
+            </div>
+        );
+    }
+
+    if (viewerRole === 'user') {
         return <Navigate to="/directory" replace />;
     }
 
