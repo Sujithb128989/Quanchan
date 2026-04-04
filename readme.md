@@ -1,4 +1,4 @@
-<![CDATA[<div align="center">
+<div align="center">
 
 # QuanChan
 
@@ -417,4 +417,3 @@ This project is licensed under the Apache License 2.0. See [LICENSE](./LICENSE).
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19423061.svg)](https://doi.org/10.5281/zenodo.19423061)
 
 </div>
-]]>
