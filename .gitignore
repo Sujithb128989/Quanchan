@@ -74,3 +74,13 @@ pgdata/
 # Local research and paper workspace
 paper/
 tmp_previous_paper.txt
+
+# Logs
+backend_logs.txt
+build_log.txt
+
+# Internal notes
+testing.md
+
+# Environment files
+.env
