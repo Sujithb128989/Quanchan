@@ -238,7 +238,7 @@ export default function PostForm({ boardId, threadId, initialContent, onSuccess,
                     type="file"
                     ref={fileInputRef}
                     onChange={handleFileChange}
-                    accept="image/*,video/*"
+                    accept="image/*"
                     className="hidden"
                 />
 

@@ -2830,8 +2830,7 @@ void RunHTTPServer(DBManager& db_manager, int port,
             std::string file_data = file.content;
             std::string ext = normalized_upload_extension(file.filename, file.content_type, file_data);
             if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".gif" &&
-                ext != ".webp" && ext != ".mp4" && ext != ".webm" && ext != ".mp3" &&
-                ext != ".ogg" && ext != ".wav") {
+                ext != ".webp" && ext != ".mp3" && ext != ".ogg" && ext != ".wav") {
                 res.status = 400;
                 res.set_content("{\"error\":\"Disallowed file extension\"}", "application/json");
                 return;
