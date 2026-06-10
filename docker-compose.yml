@@ -34,6 +34,9 @@ services:
       - "${GRPC_PORT:-50051}:50051"
     environment:
       PG_CONN_STRING: "host=db port=5432 dbname=quanchan user=quanchan password=${PG_PASSWORD:-quanchan_pqc_2026}"
+      QC_NOWPAYMENTS_API_KEY: "${QC_NOWPAYMENTS_API_KEY}"
+      QC_NOWPAYMENTS_IPN_SECRET: "${QC_NOWPAYMENTS_IPN_SECRET}"
+      QC_SERVER_SALT: "${QC_SERVER_SALT:-quanchan_quantum_salt_2026_secure}"
     volumes:
       # Application config (read-only)
       - ./config.json:/app/config.json:ro

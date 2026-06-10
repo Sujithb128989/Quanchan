@@ -1,5 +1,21 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 /**
- * useDilithium — WASM Bridge Hook for Dilithium5 Signature Verification
+ * useDilithium â€” WASM Bridge Hook for Dilithium5 Signature Verification
  *
  * Asynchronously loads dilithium_wasm.js from /wasm/ and exposes a
  * verifySignature function with strict WASM heap memory management.
@@ -123,44 +139,54 @@ export function useDilithium() {
         return null;
       }
 
-      // Decode inputs to Uint8Arrays
-      const msgBytes = stringToUint8Array(payloadString);
-      const sigBytes = base64ToUint8Array(sigBase64);
-      const pubBytes = base64ToUint8Array(pubKeyBase64);
-
-      // Allocate WASM heap memory for each buffer
-      let msgPtr = 0;
-      let sigPtr = 0;
-      let pubPtr = 0;
+      if (!payloadString || !sigBase64 || !pubKeyBase64) {
+        console.warn('[PQC] verifySignature called with empty payload, signature, or public key');
+        return -1;
+      }
 
       try {
-        msgPtr = module._malloc(msgBytes.length);
-        sigPtr = module._malloc(sigBytes.length);
-        pubPtr = module._malloc(pubBytes.length);
+        // Decode inputs to Uint8Arrays
+        const msgBytes = stringToUint8Array(payloadString);
+        const sigBytes = base64ToUint8Array(sigBase64);
+        const pubBytes = base64ToUint8Array(pubKeyBase64);
 
-        if (!msgPtr || !sigPtr || !pubPtr) {
-          console.error('[PQC] WASM _malloc returned null pointer');
-          return -2;
+        // Allocate WASM heap memory for each buffer
+        let msgPtr = 0;
+        let sigPtr = 0;
+        let pubPtr = 0;
+
+        try {
+          msgPtr = module._malloc(msgBytes.length);
+          sigPtr = module._malloc(sigBytes.length);
+          pubPtr = module._malloc(pubBytes.length);
+
+          if (!msgPtr || !sigPtr || !pubPtr) {
+            console.error('[PQC] WASM _malloc returned null pointer');
+            return -2;
+          }
+
+          // Copy JS Uint8Array data into the WASM linear memory
+          module.HEAPU8.set(msgBytes, msgPtr);
+          module.HEAPU8.set(sigBytes, sigPtr);
+          module.HEAPU8.set(pubBytes, pubPtr);
+
+          // Call the compiled C function
+          const result = module._dilithium5_verify(
+            msgPtr, msgBytes.length,
+            sigPtr, sigBytes.length,
+            pubPtr, pubBytes.length
+          );
+
+          return result;
+        } finally {
+          // CRITICAL: Always free allocated WASM heap memory
+          if (msgPtr) module._free(msgPtr);
+          if (sigPtr) module._free(sigPtr);
+          if (pubPtr) module._free(pubPtr);
         }
-
-        // Copy JS Uint8Array data into the WASM linear memory
-        module.HEAPU8.set(msgBytes, msgPtr);
-        module.HEAPU8.set(sigBytes, sigPtr);
-        module.HEAPU8.set(pubBytes, pubPtr);
-
-        // Call the compiled C function
-        const result = module._dilithium5_verify(
-          msgPtr, msgBytes.length,
-          sigPtr, sigBytes.length,
-          pubPtr, pubBytes.length
-        );
-
-        return result;
-      } finally {
-        // CRITICAL: Always free allocated WASM heap memory
-        if (msgPtr) module._free(msgPtr);
-        if (sigPtr) module._free(sigPtr);
-        if (pubPtr) module._free(pubPtr);
+      } catch (err) {
+        console.error('[PQC] Error decoding/verifying signature:', err);
+        return -1;
       }
     },
     []

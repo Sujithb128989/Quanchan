@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 
@@ -5,7 +21,7 @@ function Section({ title, children, id }: { title: string; children: React.React
     return (
         <div id={id} className="flat-card" style={{ marginBottom: '12px' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                <h2 className="text-sm font-bold" style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>{title}</h2>
+                <h2 className="text-sm font-bold" style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{title}</h2>
             </div>
             <div style={{ padding: '16px 20px', color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.75 }}>
                 {children}
@@ -45,7 +61,7 @@ export function FAQPage() {
     return (
         <div style={{ padding: '24px 16px', maxWidth: '720px', margin: '0 auto' }}>
             <div style={{ marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
-                <h1 className="text-xl font-black font-mono" style={{ color: '#fff' }}>Frequently Asked Questions</h1>
+                <h1 className="text-xl font-black font-mono" style={{ color: 'var(--text)' }}>Frequently Asked Questions</h1>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>Everything you need to know about QuanChan.</p>
             </div>
 
@@ -99,7 +115,7 @@ export function RulesPage() {
     return (
         <div style={{ padding: '24px 16px', maxWidth: '720px', margin: '0 auto' }}>
             <div style={{ marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
-                <h1 className="text-xl font-black font-mono" style={{ color: '#fff' }}>Community Rules</h1>
+                <h1 className="text-xl font-black font-mono" style={{ color: 'var(--text)' }}>Community Rules</h1>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>By using QuanChan, you agree to these rules.</p>
             </div>
 
@@ -130,7 +146,7 @@ export function RulesPage() {
                             {index + 1}
                         </span>
                         <div>
-                            <h3 className="text-sm font-semibold mb-1" style={{ color: '#fff' }}>{rule.title}</h3>
+                            <h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>{rule.title}</h3>
                             <p className="text-sm" style={{ color: 'var(--text-muted)', lineHeight: 1.6 }}>{rule.desc}</p>
                         </div>
                     </div>

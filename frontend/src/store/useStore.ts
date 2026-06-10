@@ -1,5 +1,101 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { create } from 'zustand';
 import type { AppState, Thread, Post } from '../types';
+import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+    const binary = atob(value);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+        out[i] = binary.charCodeAt(i);
+    }
+    return out;
+}
+
+const encoder = new TextEncoder();
+
+// Global fetch interceptor to append CSRF token, request signatures, and include credentials
+const originalFetch = window.fetch;
+window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
+    const newInit = { ...init };
+    newInit.credentials = newInit.credentials || 'include';
+
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; csrf_token=`);
+    const csrfToken = parts.length === 2 ? parts.pop()?.split(';').shift() : '';
+
+    if (csrfToken) {
+        newInit.headers = {
+            ...newInit.headers,
+            'X-CSRF-Token': csrfToken,
+        };
+    }
+
+    const urlString = input instanceof URL ? input.toString() : typeof input === 'string' ? input : input.url;
+    let pathname = '';
+    try {
+        pathname = new URL(urlString, window.location.origin).pathname;
+    } catch (e) {
+        pathname = urlString;
+    }
+
+    const isProtected = pathname === '/api/profile/update' ||
+                        pathname.startsWith('/api/friends/') ||
+                        pathname.startsWith('/api/messages') ||
+                        pathname.startsWith('/api/notifications') ||
+                        pathname === '/api/profile/select_tag';
+
+    if (isProtected) {
+        const stored = localStorage.getItem('quanchan_identity');
+        if (stored) {
+            try {
+                const identity = JSON.parse(stored);
+                if (identity && identity.pqcIdentitySecretKey && identity.displayHash) {
+                    const timestamp = Math.floor(Date.now() / 1000).toString();
+                    const bodyStr = newInit.body ? String(newInit.body) : '';
+                    
+                    const msg = `${timestamp}:${pathname}:${bodyStr}`;
+                    const sig = ml_dsa87.sign(encoder.encode(msg), base64ToBytes(identity.pqcIdentitySecretKey));
+                    const sigB64 = bytesToBase64(sig);
+
+                    newInit.headers = {
+                        ...newInit.headers,
+                        'X-QC-Signature': sigB64,
+                        'X-QC-Timestamp': timestamp,
+                        'X-QC-Identity': identity.displayHash,
+                    };
+                }
+            } catch (err) {
+                console.error('[Crypto] Failed to sign request:', err);
+            }
+        }
+    }
+
+    return originalFetch(input, newInit);
+};
 
 const API_BASE = '/api';
 const POST_CREATED_EVENT = 'quanchan:post-created';
@@ -20,6 +116,8 @@ function mapBackendPost(raw: any, boardId: string, threadId?: number): Post {
         tripcode: raw.tripcode || undefined,
         sage: Boolean(raw.sage),
         replies: [],
+        subscriptionTier: raw.subscriptionTier || undefined,
+        customBadge: raw.customBadge || undefined,
     };
 }
 
@@ -70,6 +168,7 @@ interface LiveAppState extends AppState {
     ) => Promise<void>;
     getRecoveryBundle: (recoveryLookupHash: string) => Promise<any>;
     claimFounder: (hash: string, phrase: string) => Promise<{ role: string; founder_token: string }>;
+    adminLogin: (actorHash: string, founderToken: string) => Promise<any>;
     setProfileRole: (actorHash: string, founderToken: string, targetHash: string, role: 'user' | 'moderator') => Promise<any>;
     interactPost: (postId: number, hash: string, type: 1 | -1) => Promise<{likes: number, dislikes: number}>;
     sendFriendRequest: (senderHash: string, receiverHash: string) => Promise<void>;
@@ -103,6 +202,14 @@ interface LiveAppState extends AppState {
     deletePostAsModerator: (postId: number, actorHash: string, founderToken?: string) => Promise<any>;
     banUserAsModerator: (targetHash: string, actorHash: string, reason?: string, founderToken?: string) => Promise<any>;
     unbanUserAsModerator: (targetHash: string, actorHash: string, founderToken?: string) => Promise<any>;
+    getBans: (actorHash: string) => Promise<{ bans: any[] }>;
+    banUser: (actorHash: string, target: string, banType: 'identity' | 'ip', reason: string, durationSeconds: number) => Promise<any>;
+    unbanUser: (actorHash: string, banId: string) => Promise<any>;
+    extendBan: (actorHash: string, banId: string, durationSeconds: number) => Promise<any>;
+    selectTag: (hash: string, tag: string) => Promise<any>;
+    createPayment: (hash: string, tier: string, payCurrency: string) => Promise<any>;
+    simulatePaymentSuccess: (orderId: string) => Promise<any>;
+    giftUser: (actorHash: string, targetHash: string, giftType: 'tag' | 'subscription', giftValue: string, durationDays: number) => Promise<any>;
 }
 
 export const useStore = create<LiveAppState>((set, get) => ({
@@ -183,13 +290,27 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    setProfileRole: async (actorHash: string, founderToken: string, targetHash: string, role: 'user' | 'moderator') => {
-        const res = await fetch(`${API_BASE}/admin/roles`, {
+    adminLogin: async (actorHash: string, founderToken: string) => {
+        const res = await fetch(`${API_BASE}/admin/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 actor_hash: actorHash,
                 founder_token: founderToken,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Admin login failed');
+        }
+        return data;
+    },
+    setProfileRole: async (actorHash: string, _founderToken: string, targetHash: string, role: 'user' | 'moderator') => {
+        const res = await fetch(`${API_BASE}/admin/roles`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actor_hash: actorHash,
                 target_hash: targetHash,
                 role,
             }),
@@ -344,10 +465,9 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    getModerationReports: async (actorHash: string, founderToken = '', limit = 50) => {
+    getModerationReports: async (actorHash: string, _founderToken = '', limit = 50) => {
         const qs = new URLSearchParams();
         qs.set('limit', String(limit));
-        if (founderToken) qs.set('founder_token', founderToken);
         const res = await fetch(`${API_BASE}/admin/reports/${encodeURIComponent(actorHash)}?${qs.toString()}`);
         const data = await res.json().catch(() => ({ reports: [] }));
         if (!res.ok) {
@@ -355,10 +475,9 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    getModerationAudit: async (actorHash: string, founderToken = '', limit = 50) => {
+    getModerationAudit: async (actorHash: string, _founderToken = '', limit = 50) => {
         const qs = new URLSearchParams();
         qs.set('limit', String(limit));
-        if (founderToken) qs.set('founder_token', founderToken);
         const res = await fetch(`${API_BASE}/admin/audit/${encodeURIComponent(actorHash)}?${qs.toString()}`);
         const data = await res.json().catch(() => ({ events: [] }));
         if (!res.ok) {
@@ -366,13 +485,12 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    resolveModerationReport: async (reportId: number, actorHash: string, status: 'open' | 'resolved' | 'dismissed', note = '', founderToken = '') => {
+    resolveModerationReport: async (reportId: number, actorHash: string, status: 'open' | 'resolved' | 'dismissed', note = '', _founderToken = '') => {
         const res = await fetch(`${API_BASE}/admin/reports/${encodeURIComponent(String(reportId))}/resolve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 actor_hash: actorHash,
-                founder_token: founderToken,
                 status,
                 note,
             }),
@@ -383,13 +501,12 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    deletePostAsModerator: async (postId: number, actorHash: string, founderToken = '') => {
+    deletePostAsModerator: async (postId: number, actorHash: string, _founderToken = '') => {
         const res = await fetch(`${API_BASE}/admin/posts/${encodeURIComponent(String(postId))}/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 actor_hash: actorHash,
-                founder_token: founderToken,
             }),
         });
         const data = await res.json().catch(() => ({}));
@@ -398,13 +515,12 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    banUserAsModerator: async (targetHash: string, actorHash: string, reason = '', founderToken = '') => {
+    banUserAsModerator: async (targetHash: string, actorHash: string, reason = '', _founderToken = '') => {
         const res = await fetch(`${API_BASE}/admin/users/ban`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 actor_hash: actorHash,
-                founder_token: founderToken,
                 target_hash: targetHash,
                 reason,
             }),
@@ -415,19 +531,73 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    unbanUserAsModerator: async (targetHash: string, actorHash: string, founderToken = '') => {
+    unbanUserAsModerator: async (targetHash: string, actorHash: string, _founderToken = '') => {
         const res = await fetch(`${API_BASE}/admin/users/unban`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 actor_hash: actorHash,
-                founder_token: founderToken,
                 target_hash: targetHash,
             }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             throw new Error(data?.error || 'Unbanning user failed');
+        }
+        return data;
+    },
+    getBans: async (actorHash: string) => {
+        const res = await fetch(`${API_BASE}/admin/bans?actor_hash=${encodeURIComponent(actorHash)}`);
+        const data = await res.json().catch(() => ({ bans: [] }));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Loading bans failed');
+        }
+        return data;
+    },
+    banUser: async (actorHash: string, target: string, banType: 'identity' | 'ip', reason: string, durationSeconds: number) => {
+        const res = await fetch(`${API_BASE}/admin/ban`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actor_hash: actorHash,
+                target,
+                ban_type: banType,
+                reason,
+                duration_seconds: Number(durationSeconds)
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Creating ban failed');
+        }
+        return data;
+    },
+    unbanUser: async (actorHash: string, banId: string) => {
+        const res = await fetch(`${API_BASE}/admin/ban/${encodeURIComponent(banId)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actor_hash: actorHash
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Unbanning failed');
+        }
+        return data;
+    },
+    extendBan: async (actorHash: string, banId: string, durationSeconds: number) => {
+        const res = await fetch(`${API_BASE}/admin/ban/${encodeURIComponent(banId)}/extend`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actor_hash: actorHash,
+                duration_seconds: Number(durationSeconds)
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Extending ban failed');
         }
         return data;
     },
@@ -568,5 +738,59 @@ export const useStore = create<LiveAppState>((set, get) => ({
         set((s) => ({
             threads: s.threads.map((t) => t.id === threadId ? { ...t, archived: true } : t),
         }));
+    },
+    selectTag: async (hash: string, tag: string) => {
+        const res = await fetch(`${API_BASE}/profile/select_tag`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pub_key_hash: hash, tag })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Failed to select active tag');
+        }
+        return data;
+    },
+    createPayment: async (hash: string, tier: string, payCurrency: string) => {
+        const res = await fetch(`${API_BASE}/payments/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ actor_hash: hash, tier, pay_currency: payCurrency })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Failed to create payment invoice');
+        }
+        return data;
+    },
+    simulatePaymentSuccess: async (orderId: string) => {
+        const res = await fetch(`${API_BASE}/payments/simulate_success`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_id: orderId })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Simulation failed');
+        }
+        return data;
+    },
+    giftUser: async (actorHash: string, targetHash: string, giftType: 'tag' | 'subscription', giftValue: string, durationDays: number) => {
+        const res = await fetch(`${API_BASE}/admin/gift`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actor_hash: actorHash,
+                target_hash: targetHash,
+                gift_type: giftType,
+                gift_value: giftValue,
+                duration_days: durationDays
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || 'Failed to gift user');
+        }
+        return data;
     },
 }));

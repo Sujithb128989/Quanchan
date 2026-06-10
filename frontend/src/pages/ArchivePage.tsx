@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { useParams, Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { Archive, ExternalLink } from 'lucide-react';
@@ -37,7 +53,7 @@ export default function ArchivePage() {
             <div className="flex items-center justify-between mb-4" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
                 <div className="flex items-center gap-2">
                     <Archive size={16} style={{ color: 'var(--text-dim)' }} />
-                    <h1 className="text-lg font-black font-mono" style={{ color: '#fff' }}>/{boardId}/ Archive</h1>
+                    <h1 className="text-lg font-black font-mono" style={{ color: 'var(--text)' }}>/{boardId}/ Archive</h1>
                 </div>
                 <div className="flex gap-2">
                     <Link to={`/${boardId}`} className="btn-v2 text-xs" style={{ padding: '4px 10px', textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>Index</Link>

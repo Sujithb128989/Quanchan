@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useIdentity } from '../hooks/useIdentity';
@@ -477,33 +493,19 @@ export default function DirectMessagesPage() {
             <button
                 key={`${kind}:${contact.hash}`}
                 onClick={() => openConversation(contact.hash, contact.label)}
-                style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    background: isSelected ? 'var(--surface-2)' : 'transparent',
-                    borderLeft: isSelected ? `3px solid ${accent}` : '3px solid transparent',
-                    borderBottom: '1px solid var(--border)',
-                    borderTop: 'none',
-                    borderRight: 'none',
-                    borderBottomStyle: 'solid',
-                    textAlign: 'left',
-                }}
+                className={`dm-contact-btn ${isSelected ? 'is-selected' : ''} ${kind === 'incoming' ? 'is-incoming' : kind === 'outgoing' ? 'is-outgoing' : ''}`}
             >
-                <Hash size={12} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+                <Hash size={12} style={{ color: isSelected ? accent : 'var(--text-dim)', flexShrink: 0, transition: 'color 0.2s' }} />
                 <div style={{ minWidth: 0, flex: 1 }}>
                     <div className="text-xs font-bold flex items-center justify-between gap-2" style={{ color: isSelected ? 'var(--text)' : 'var(--text-muted)' }}>
                         <span className="truncate">{contact.label}</span>
                         {(contact.unreadCount || 0) > 0 && (
-                            <span className="identity-badge" style={{ padding: '2px 6px', color: accent }}>
+                            <span className="identity-badge" style={{ padding: '2px 6px', color: accent, borderColor: accent }}>
                                 {contact.unreadCount}
                             </span>
                         )}
                     </div>
-                    <div className="text-xs truncate" style={{ color: 'var(--text-dim)' }}>
+                    <div className="text-xs truncate" style={{ color: 'var(--text-dim)', marginTop: '2px' }}>
                         {contact.lastMessage || contact.hash}
                     </div>
                 </div>
@@ -542,7 +544,7 @@ export default function DirectMessagesPage() {
             let payloadText = outgoingText;
 
             if (outgoingText && selectedHash !== 'admin') {
-                const peerProfile = await fetchProfile(selectedHash, { force: true });
+                const peerProfile = await fetchProfile(selectedHash);
                 if (!peerProfile?.pub_key_hash) {
                     throw new Error('That profile is not published yet. Ask them to open QuanChan in a normal browser and finish identity setup before messaging.');
                 }
@@ -828,29 +830,35 @@ export default function DirectMessagesPage() {
                                             )}
                                         </>
                                     )}
-                                    <div className="dm-header__status text-xs font-mono flex items-center gap-1" style={{ color: snapshotVerified === true ? 'var(--green)' : snapshotVerified === false ? 'var(--red)' : 'var(--text-dim)', marginTop: !isPhone && selectedHash !== 'admin' ? '4px' : '0' }}>
-                                        {snapshotVerified === true ? <ShieldCheck size={11} /> : snapshotVerified === false ? <ShieldAlert size={11} /> : <Lock size={11} />}
-                                        {snapshotVerified === true ? 'Dilithium5 snapshot verified' : snapshotVerified === false ? 'Snapshot signature invalid' : 'Snapshot signature pending'}
+                                                                  <div className="flex flex-wrap gap-2 mt-2 items-center">
+                                        <div className={`dm-status-tag ${snapshotVerified === true ? 'is-success' : snapshotVerified === false ? 'is-error' : 'is-pending'}`}>
+                                            {snapshotVerified === true ? <ShieldCheck size={12} /> : snapshotVerified === false ? <ShieldAlert size={12} /> : <Lock size={12} />}
+                                            <span>{snapshotVerified === true ? 'Dilithium5 Verified' : snapshotVerified === false ? 'Signature Invalid' : 'Signature Pending'}</span>
+                                        </div>
+                                        {selectedHash !== 'admin' && (
+                                            <div className={`dm-status-tag ${peerMessagingState === 'ready' ? 'is-success' : peerMessagingState === 'unknown' ? 'is-pending' : 'is-warning'}`}>
+                                                <Lock size={12} />
+                                                <span>
+                                                    {peerMessagingState === 'ready' && 'Recipient PQC Published'}
+                                                    {peerMessagingState === 'missing_profile' && 'Recipient Profile Missing'}
+                                                    {peerMessagingState === 'missing_pqc' && 'Recipient Key Missing'}
+                                                    {peerMessagingState === 'unknown' && 'Checking PQC status...'}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {selectedHash !== 'admin' && (
+                                            <div className={`dm-status-tag ${channelStatus === 'accepted' ? 'is-success' : channelStatus === 'blocked' ? 'is-error' : channelStatus === 'request_pending_incoming' ? 'is-warning' : channelStatus === 'request_pending_outgoing' ? 'is-info' : 'is-pending'}`}>
+                                                <span>
+                                                    {channelStatus === 'accepted' && 'Accepted Chat'}
+                                                    {channelStatus === 'request_pending_incoming' && 'Incoming Request'}
+                                                    {channelStatus === 'request_pending_outgoing' && 'Request Pending'}
+                                                    {channelStatus === 'request_declined' && 'Request Declined'}
+                                                    {channelStatus === 'blocked' && 'Blocked'}
+                                                    {(channelStatus === 'no_channel' || channelStatus === 'unknown') && 'Request Opens On Send'}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
-                                    {selectedHash !== 'admin' && (
-                                        <div className="dm-header__status text-xs font-mono flex items-center gap-1" style={{ color: peerMessagingState === 'ready' ? 'var(--green)' : peerMessagingState === 'unknown' ? 'var(--text-dim)' : 'var(--gold)', marginTop: '4px' }}>
-                                            <Lock size={11} />
-                                            {peerMessagingState === 'ready' && 'Recipient PQC messaging key is published'}
-                                            {peerMessagingState === 'missing_profile' && 'Recipient has not published a profile on this browser yet'}
-                                            {peerMessagingState === 'missing_pqc' && 'Recipient profile exists, but PQC messaging key is still missing'}
-                                            {peerMessagingState === 'unknown' && 'Checking recipient PQC messaging status...'}
-                                        </div>
-                                    )}
-                                    {selectedHash !== 'admin' && (
-                                        <div className="dm-header__status text-xs font-mono" style={{ color: channelStatus === 'accepted' ? 'var(--green)' : channelStatus === 'blocked' ? 'var(--red)' : channelStatus === 'request_pending_incoming' ? 'var(--gold)' : channelStatus === 'request_pending_outgoing' ? 'var(--cyan)' : 'var(--text-dim)', marginTop: '4px' }}>
-                                            {channelStatus === 'accepted' && 'Accepted conversation'}
-                                            {channelStatus === 'request_pending_incoming' && 'Incoming message request waiting for your decision'}
-                                            {channelStatus === 'request_pending_outgoing' && 'Waiting for the other person to accept your request'}
-                                            {channelStatus === 'request_declined' && 'Previous message request was declined'}
-                                            {channelStatus === 'blocked' && 'Conversation is blocked'}
-                                            {(channelStatus === 'no_channel' || channelStatus === 'unknown') && 'No accepted channel yet. Your next message will open a request.'}
-                                        </div>
-                                    )}
                                 </div>
                             </div>
 
@@ -908,7 +916,7 @@ export default function DirectMessagesPage() {
                                             )}
                                             {msg.text && !inlineImage && <p className="dm-message-text" style={{ fontSize: '0.875rem', lineHeight: 1.5 }}>{msg.text}</p>}
                                             <span className="dm-message-meta" style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', opacity: 0.6, marginTop: '4px', display: 'block' }}>
-                                                {formatTS(msg.timestamp)}{msg.isPqcEncrypted ? ' · PQC E2EE' : ''}
+                                                {formatTS(msg.timestamp)}{msg.isPqcEncrypted ? ' Â· PQC E2EE' : ''}
                                             </span>
                                         </div>
                                     </div>

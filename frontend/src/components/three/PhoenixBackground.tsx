@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { TextureLoader } from 'three';
@@ -133,7 +149,7 @@ function PhoenixHologram({ texture, isMobile }: { texture: THREE.Texture; isMobi
     );
 }
 
-// Camera zoom controller — drives camera.position.z towards target
+// Camera zoom controller â€” drives camera.position.z towards target
 function CameraZoom({ zooming }: { zooming: boolean }) {
     const { camera } = useThree();
     const targetZ = useRef(20);

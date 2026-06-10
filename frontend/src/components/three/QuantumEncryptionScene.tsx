@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { useRef, useMemo } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { EffectComposer, Bloom, Vignette, ChromaticAberration } from '@react-three/postprocessing';
@@ -5,7 +21,7 @@ import { BlendFunction } from 'postprocessing';
 import * as THREE from 'three';
 import { TextureLoader } from 'three';
 
-// ─── Bloch Sphere (qubit) ────────────────────────────────────────────────────
+// â”€â”€â”€ Bloch Sphere (qubit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function BlochSphere({ index, phase }: { index: number; phase: number }) {
     const groupRef = useRef<THREE.Group>(null);
     const sphereRef = useRef<THREE.Mesh>(null);
@@ -28,7 +44,7 @@ function BlochSphere({ index, phase }: { index: number; phase: number }) {
         sphereRef.current.rotation.x += 0.015;
         ringRef.current.rotation.z += 0.02;
 
-        // Color shift: red → cyan based on phase
+        // Color shift: red â†’ cyan based on phase
         const mat = sphereRef.current.material as THREE.MeshStandardMaterial;
         const r = 1 - phase;
         const g = 0.27 + phase * 0.73;
@@ -61,7 +77,7 @@ function BlochSphere({ index, phase }: { index: number; phase: number }) {
     );
 }
 
-// ─── Entanglement Lines ───────────────────────────────────────────────────────
+// â”€â”€â”€ Entanglement Lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function EntanglementLines({ phase }: { phase: number }) {
     const ref = useRef<THREE.Line>(null);
     const positions = useMemo(() => new Float32Array(12 * 2 * 3), []);
@@ -108,7 +124,7 @@ function EntanglementLines({ phase }: { phase: number }) {
     );
 }
 
-// ─── Quantum Gate Symbol ──────────────────────────────────────────────────────
+// â”€â”€â”€ Quantum Gate Symbol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function QuantumGate({ phase }: { gateType: string; phase: number }) {
     const ref = useRef<THREE.Group>(null);
     useFrame((state) => {
@@ -137,7 +153,7 @@ function QuantumGate({ phase }: { gateType: string; phase: number }) {
     );
 }
 
-// ─── Phoenix Hologram ─────────────────────────────────────────────────────────
+// â”€â”€â”€ Phoenix Hologram â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function PhoenixCenter({ texture, phase }: { texture: THREE.Texture; phase: number }) {
     const ref = useRef<THREE.Mesh>(null);
     useFrame((state) => {
@@ -164,7 +180,7 @@ function PhoenixCenter({ texture, phase }: { texture: THREE.Texture; phase: numb
     );
 }
 
-// ─── God Ray Lines ────────────────────────────────────────────────────────────
+// â”€â”€â”€ God Ray Lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function GodRays() {
     const ref = useRef<THREE.Group>(null);
     useFrame((state) => {
@@ -194,7 +210,7 @@ function GodRays() {
     );
 }
 
-// ─── Particle Explosion (climax) ──────────────────────────────────────────────
+// â”€â”€â”€ Particle Explosion (climax) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function ParticleExplosion({ triggered }: { triggered: boolean }) {
     const ref = useRef<THREE.Points>(null);
     const COUNT = 5000;
@@ -255,7 +271,7 @@ function ParticleExplosion({ triggered }: { triggered: boolean }) {
     );
 }
 
-// ─── Full Scene ───────────────────────────────────────────────────────────────
+// â”€â”€â”€ Full Scene â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function QuantumScene({ phase, explode }: { phase: number; explode: boolean }) {
     const texture = useLoader(TextureLoader, '/phoenix.png');
     const gateIndex = Math.floor(phase * 4);

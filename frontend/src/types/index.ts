@@ -24,6 +24,8 @@ export interface Post {
     tripcode?: string;
     sage: boolean;
     replies: number[];
+    subscriptionTier?: string;
+    customBadge?: string;
 }
 
 export interface Thread {
@@ -77,4 +79,5 @@ export interface AppState {
     createThread: (boardId: string, subject: string, content: string, imageUrl: string, name: string, authorHash?: string, encryptedContent?: string) => Promise<Thread>;
     createReply: (boardId: string, threadId: number, content: string, imageUrl: string, name: string, authorHash?: string, encryptedContent?: string) => Promise<Post>;
     archiveThread: (threadId: number) => void;
+    giftUser?: (actorHash: string, targetHash: string, giftType: 'tag' | 'subscription', giftValue: string, durationDays: number) => Promise<any>;
 }

@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, X, Image as ImageIcon } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -112,15 +128,15 @@ export default function PostForm({ boardId, threadId, initialContent, onSuccess,
                 subject,
                 imageUrl,
                 name: finalName,
-                authorHash: identity?.displayHash || '',
+                authorHash: usePublicName ? (identity?.displayHash || '') : '',
             });
             setQuantumModalVisible(true);
         } else {
             try {
                 if (threadId) {
-                    await createReply(boardId, threadId, content, imageUrl, finalName, identity?.displayHash || '');
+                    await createReply(boardId, threadId, content, imageUrl, finalName, usePublicName ? (identity?.displayHash || '') : '');
                 } else {
-                    await createThread(boardId, subject, content, imageUrl, finalName, identity?.displayHash || '');
+                    await createThread(boardId, subject, content, imageUrl, finalName, usePublicName ? (identity?.displayHash || '') : '');
                 }
             } catch (e: any) {
                 let msg = 'Failed to submit post.';
@@ -134,7 +150,7 @@ export default function PostForm({ boardId, threadId, initialContent, onSuccess,
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
     const handleDrop = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); const file = e.dataTransfer.files?.[0]; if (file) handleFileUpload(file); };
 
-    // Collapsed state — just show a bar
+    // Collapsed state â€” just show a bar
     if (collapsed) {
         return (
             <button
@@ -263,13 +279,13 @@ export default function PostForm({ boardId, threadId, initialContent, onSuccess,
             />
 
             {error && (
-                <p className="text-xs font-mono" style={{ color: 'var(--red)' }}>⚠ {error}</p>
+                <p className="text-xs font-mono" style={{ color: 'var(--red)' }}>âš  {error}</p>
             )}
 
             <div className="flex flex-wrap items-center mt-2 w-full gap-3" style={{ justifyContent: 'space-between' }}>
                 <span className="text-xs font-mono" style={{ color: 'var(--text-dim)', flex: '1 1 180px' }}>
                     {usePublicName && identity ? `Posting as: ${identity.username || identity.displayHash}` : 'Posting as: Anonymous'}
-                    {encryptionState.enabled ? ' • Encrypted locally before upload' : ''}
+                    {encryptionState.enabled ? ' â€¢ Encrypted locally before upload' : ''}
                 </span>
                 <button
                     type="submit"

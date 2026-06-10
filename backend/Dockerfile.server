@@ -52,9 +52,12 @@ RUN git clone --branch 0.10.1 --single-branch --depth 1 \
     && ldconfig \
     && rm -rf /tmp/liboqs
 
-RUN git clone --recurse-submodules -b v1.62.1 --depth 1 \
-        https://github.com/grpc/grpc /tmp/grpc \
-    && cd /tmp/grpc && mkdir build && cd build \
+RUN git config --global http.postBuffer 1048576000 \
+    && git config --global http.version HTTP/1.1 \
+    && git clone -b v1.62.1 --depth 1 https://github.com/grpc/grpc /tmp/grpc \
+    && cd /tmp/grpc \
+    && git submodule update --init --recursive --depth 1 \
+    && mkdir build && cd build \
     && cmake .. \
          -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_INSTALL_PREFIX=/usr/local \

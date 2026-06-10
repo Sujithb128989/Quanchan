@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, MoreVertical, ShieldCheck, ShieldAlert, Key, Calendar, MessageCircle, Reply, ThumbsUp, ThumbsDown, Share2, Link2, Flag, Trash2, X } from 'lucide-react';
@@ -254,6 +270,35 @@ export default function Post({
                             {displayName}
                         </span>
                         {tripcode && (<span className="identity-badge">{tripcode}</span>)}
+                        {post.subscriptionTier === 'circle' && (
+                            <span className="identity-badge px-2 py-0.5 text-xs font-bold text-cyan-400 border border-cyan-400 rounded bg-cyan-950/30">
+                                Circle
+                            </span>
+                        )}
+                        {post.subscriptionTier === 'hermes' && (
+                            <span className="identity-badge px-2 py-0.5 text-xs font-bold text-purple-400 border border-purple-400 rounded bg-purple-950/30">
+                                Hermes
+                            </span>
+                        )}
+                        {post.customBadge && (
+                            <span className={`identity-badge px-2 py-0.5 text-xs font-bold border rounded ${
+                                post.customBadge === 'queen' ? 'text-fuchsia-400 border-violet-500 bg-violet-950/30' :
+                                post.customBadge === 'daddy' ? 'text-pink-400 border-pink-500 bg-pink-950/30' :
+                                post.customBadge === 'OG' ? 'text-amber-400 border-amber-500 bg-amber-950/30' :
+                                post.customBadge === 'LGBT' ? 'text-emerald-400 border-emerald-500 bg-emerald-950/30' :
+                                post.customBadge === 'VIP' ? 'text-blue-400 border-blue-500 bg-blue-950/30' :
+                                post.customBadge === 'CHAD' ? 'text-red-400 border-red-500 bg-red-950/30' :
+                                post.customBadge === 'DONOR' ? 'text-teal-400 border-teal-500 bg-teal-950/30' :
+                                post.customBadge === 'PREMIUM' ? 'text-orange-400 border-orange-500 bg-orange-950/30' :
+                                post.customBadge === 'WAIFU' ? 'text-fuchsia-400 border-fuchsia-500 bg-fuchsia-950/30' :
+                                post.customBadge === 'SIMP' ? 'text-violet-400 border-violet-500 bg-violet-950/30' :
+                                post.customBadge === 'ELITE' ? 'text-rose-500 border-rose-600 bg-rose-950/30' :
+                                post.customBadge === 'BOOSTER' ? 'text-sky-400 border-sky-500 bg-sky-950/30' :
+                                'text-zinc-400 border-zinc-500 bg-zinc-950/30'
+                            }`}>
+                                {post.customBadge}
+                            </span>
+                        )}
 
                         {isNotAnonymous && dmTarget && (
                             <button

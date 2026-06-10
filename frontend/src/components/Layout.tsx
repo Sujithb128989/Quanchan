@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { Outlet, Link, useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { useIdentity } from '../hooks/useIdentity';
@@ -492,10 +508,8 @@ export default function Layout() {
     const mobileUtilityLinks = [
         { to: '/directory', label: 'Directory' },
         { to: '/about', label: 'About' },
-        { to: '/crypto', label: 'Crypto' },
         { to: '/faq', label: 'FAQ' },
         { to: '/rules', label: 'Rules' },
-        { to: '/contact', label: 'Contact' },
         ...(selfRole !== 'user' ? [{ to: '/moderation', label: 'Moderation' }] : []),
         ...(identity ? [{ to: `/u/${identity.displayHash}`, label: 'My Profile' }] : []),
     ];
@@ -598,37 +612,38 @@ export default function Layout() {
                             {boardsError || 'Boards are unavailable right now.'}
                         </div>
                     )}
-                    {boards.map(board => (
-                        <Link
-                            key={board.id}
-                            to={`/${board.id}`}
-                            className="hover:bg-black/10 transition-colors"
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                padding: '6px 16px',
-                                fontSize: '13px',
-                                color: location.pathname === `/${board.id}` ? 'var(--text)' : 'var(--text-muted)',
-                                textDecoration: 'none',
-                                fontFamily: 'var(--font-mono)',
-                                background: location.pathname === `/${board.id}` ? 'var(--surface-2)' : 'transparent',
-                                borderLeft: location.pathname === `/${board.id}` ? '2px solid var(--accent)' : '2px solid transparent',
-                            }}
-                        >
-                            <Hash size={12} className="flex-shrink-0" />
-                            <span className="flex-shrink-0">{board.id}</span>
-                            <span className="truncate text-right w-full" style={{ color: 'var(--text-dim)', fontSize: '11px', marginLeft: 'auto' }}>
-                                {board.name}
-                            </span>
-                        </Link>
-                    ))}
+                    {boards.map(board => {
+                        const isActive = location.pathname === `/${board.id}`;
+                        return (
+                            <Link
+                                key={board.id}
+                                to={`/${board.id}`}
+                                className={`sidebar-link ${isActive ? 'active' : ''}`}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '6px 16px',
+                                    fontSize: '13px',
+                                    textDecoration: 'none',
+                                    fontFamily: 'var(--font-mono)',
+                                }}
+                            >
+                                <Hash size={12} className="flex-shrink-0" />
+                                <span className="flex-shrink-0">{board.id}</span>
+                                <span className="truncate text-right w-full" style={{ color: 'var(--text-dim)', fontSize: '11px', marginLeft: 'auto' }}>
+                                    {board.name}
+                                </span>
+                            </Link>
+                        );
+                    })}
 
                     <div className="text-xs uppercase tracking-wider" style={{ color: 'var(--text-dim)', padding: '16px 16px 4px', fontFamily: 'var(--font-mono)' }}>
                         Direct Messages
                     </div>
                     <Link
                         to="/dm"
+                        className={`sidebar-link ${location.pathname === '/dm' ? 'active' : ''}`}
                         style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -636,11 +651,8 @@ export default function Layout() {
                             gap: '8px',
                             padding: '6px 16px',
                             fontSize: '13px',
-                            color: location.pathname === '/dm' ? '#fff' : 'var(--text-muted)',
                             textDecoration: 'none',
                             fontFamily: 'var(--font-mono)',
-                            background: location.pathname === '/dm' ? 'var(--surface-2)' : 'transparent',
-                            borderLeft: location.pathname === '/dm' ? '2px solid var(--accent)' : '2px solid transparent',
                         }}
                     >
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
@@ -661,22 +673,19 @@ export default function Layout() {
                     {[
                         { to: '/directory', label: '/directory/' },
                         { to: '/about', label: '/about/' },
-                        { to: '/crypto', label: '/crypto/' },
                         { to: '/faq', label: '/faq/' },
                         { to: '/rules', label: '/rules/' },
-                        { to: '/contact', label: '/contact/' },
                     ].map(link => {
                         const isActive = location.pathname === link.to || location.pathname.startsWith(`${link.to}/`);
                         return (
                             <Link
                                 key={link.to}
                                 to={link.to}
+                                className={`sidebar-link ${isActive ? 'active' : ''}`}
                                 style={{
                                     display: 'block',
                                     padding: '4px 8px',
                                     fontSize: '12px',
-                                    color: isActive ? 'var(--text)' : 'var(--text-muted)',
-                                    background: isActive ? 'var(--surface-2)' : 'transparent',
                                     borderRadius: '4px',
                                     textDecoration: 'none',
                                     fontFamily: 'var(--font-mono)',

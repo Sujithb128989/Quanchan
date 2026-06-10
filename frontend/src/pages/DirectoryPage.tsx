@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { useIsPhone } from '../hooks/useIsPhone';
@@ -13,7 +29,7 @@ export default function DirectoryPage() {
         <div style={{ padding: '16px' }}>
             {!isPhone && (
             <div className="mb-6" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
-                <h1 className="text-xl font-black font-mono" style={{ color: '#fff' }}>
+                <h1 className="text-xl font-black font-mono" style={{ color: 'var(--text)' }}>
                     /directory/
                 </h1>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>All boards on the network.</p>
@@ -35,7 +51,7 @@ export default function DirectoryPage() {
                             <div className="flat-card p-4 transition-colors" style={{ cursor: 'pointer' }}>
                                 <div className="flex items-center gap-2 mb-2">
                                     <Hash size={14} style={{ color: 'var(--text-dim)' }} />
-                                    <span className="font-bold font-mono" style={{ color: '#fff' }}>/{b.id}/</span>
+                                    <span className="font-bold font-mono" style={{ color: 'var(--text)' }}>/{b.id}/</span>
                                 </div>
                                 <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>{b.name}</p>
                                 <p className="text-xs" style={{ color: 'var(--text-dim)' }}>{b.description}</p>

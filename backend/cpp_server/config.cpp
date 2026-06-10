@@ -1,7 +1,24 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "config.hpp"
 #include "logger.hpp"
 #include <fstream>
 #include <iostream>
+#include <cstdlib>
 
 Config& Config::Instance() {
     static Config instance;
@@ -12,6 +29,16 @@ void Config::Load(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
         Logger::Warn("Config file not found at " + path + ". Using defaults.", "Config");
+        const char* env_salt = std::getenv("QC_SERVER_SALT");
+        if (env_salt) {
+            config_.server_salt = env_salt;
+        } else {
+            std::string fallback = config_.s3_secret_key + config_.s3_access_key;
+            if (fallback.empty()) {
+                fallback = "quanchan_default_salt_fallback_key_2026";
+            }
+            config_.server_salt = fallback;
+        }
         return;
     }
 
@@ -34,6 +61,21 @@ void Config::Load(const std::string& path) {
             if (s3.contains("region")) config_.s3_region = s3["region"];
             if (!config_.s3_bucket.empty() && !config_.s3_access_key.empty()) {
                 config_.use_s3 = true;
+            }
+        }
+
+        if (j.contains("server_salt")) {
+            config_.server_salt = j["server_salt"];
+        } else {
+            const char* env_salt = std::getenv("QC_SERVER_SALT");
+            if (env_salt) {
+                config_.server_salt = env_salt;
+            } else {
+                std::string fallback = config_.s3_secret_key + config_.s3_access_key;
+                if (fallback.empty()) {
+                    fallback = "quanchan_default_salt_fallback_key_2026";
+                }
+                config_.server_salt = fallback;
             }
         }
 

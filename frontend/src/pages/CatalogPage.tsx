@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { useParams, Link } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import CatalogCard from '../components/CatalogCard';
@@ -24,7 +40,7 @@ export default function CatalogPage() {
         return (
             <div style={{ padding: '32px', textAlign: 'center' }}>
                 <p className="text-sm font-mono" style={{ color: 'var(--text-dim)' }}>Board not found.</p>
-                <Link to="/directory" className="text-sm font-mono mt-4 inline-block" style={{ color: 'var(--text-muted)' }}>← Back to directory</Link>
+                <Link to="/directory" className="text-sm font-mono mt-4 inline-block" style={{ color: 'var(--text-muted)' }}>â† Back to directory</Link>
             </div>
         );
     }
@@ -32,7 +48,7 @@ export default function CatalogPage() {
     return (
         <div style={{ padding: '16px' }}>
             <div className="flex items-center justify-between mb-4" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-                <h1 className="text-lg font-black font-mono" style={{ color: '#fff' }}>/{boardId}/ Catalog</h1>
+                <h1 className="text-lg font-black font-mono" style={{ color: 'var(--text)' }}>/{boardId}/ Catalog</h1>
                 <div className="flex gap-2">
                     <Link to={`/${boardId}`} className="btn-v2 flex items-center gap-1 text-xs" style={{ padding: '4px 10px', textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>
                         <List size={12} /> Index

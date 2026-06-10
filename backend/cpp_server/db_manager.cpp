@@ -1,15 +1,44 @@
 #include "db_manager.hpp"
 #include "logger.hpp"
+#include <condition_variable>
+#include "config.hpp"
 #include <stdexcept>
 #include <iostream>
 #include <filesystem>
+#include <thread>
+#include <iomanip>
+#include <openssl/rand.h>
 #include <cstring>
 #include <sstream>
 #include <cctype>
 #include <algorithm>
 #include <unordered_set>
+#include <openssl/evp.h>
+#include <array>
 
 namespace {
+
+
+std::string sha256_hex(const std::string& value) {
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        return "";
+    }
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+    unsigned int digest_len = 0;
+    std::ostringstream out;
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1
+        || EVP_DigestUpdate(ctx, value.data(), value.size()) != 1
+        || EVP_DigestFinal_ex(ctx, digest.data(), &digest_len) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
+    }
+    EVP_MD_CTX_free(ctx);
+    for (unsigned int i = 0; i < digest_len; ++i) {
+        out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(digest[i]);
+    }
+    return out.str();
+}
 
 std::string HexEncode(const std::string& input) {
     static const char* kHex = "0123456789abcdef";
@@ -192,107 +221,197 @@ bool IsReservedUsername(const std::string& value) {
 // Connection & Lifecycle
 // =============================================================================
 
-DBManager::DBManager(const std::string& conn_info, SecureStorage& secure_storage)
-    : conn_(nullptr), conn_info_(conn_info), secure_storage_(secure_storage) {
-    conn_ = PQconnectdb(conn_info_.c_str());
-    if (PQstatus(conn_) != CONNECTION_OK) {
-        std::string err = PQerrorMessage(conn_);
-        PQfinish(conn_);
-        conn_ = nullptr;
-        throw std::runtime_error("PostgreSQL connection failed: " + err);
+class DBManager::ConnectionPool {
+public:
+    ConnectionPool(const std::string& conn_info, size_t pool_size)
+        : conn_info_(conn_info), pool_size_(pool_size) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (size_t i = 0; i < pool_size_; ++i) {
+            PGconn* conn = PQconnectdb(conn_info_.c_str());
+            if (!conn || PQstatus(conn) != CONNECTION_OK) {
+                std::string err = conn ? PQerrorMessage(conn) : "PQconnectdb returned null";
+                if (conn) PQfinish(conn);
+                for (auto c : pool_) {
+                    PQfinish(c);
+                }
+                throw std::runtime_error("ConnectionPool initialization failed: " + err);
+            }
+            pool_.push_back(conn);
+        }
     }
-    Logger::Info("Connected to PostgreSQL.");
+
+    ~ConnectionPool() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto conn : pool_) {
+            PQfinish(conn);
+        }
+        pool_.clear();
+    }
+
+    PGconn* Acquire() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this]() { return !pool_.empty(); });
+        PGconn* conn = pool_.back();
+        pool_.pop_back();
+
+        if (!conn || PQstatus(conn) != CONNECTION_OK) {
+            if (conn) PQfinish(conn);
+            conn = PQconnectdb(conn_info_.c_str());
+            if (!conn || PQstatus(conn) != CONNECTION_OK) {
+                std::string err = conn ? PQerrorMessage(conn) : "PQconnectdb returned null";
+                Logger::Error("Failed to heal database connection in Acquire(): " + err);
+                if (conn) PQfinish(conn);
+                conn = nullptr;
+            }
+        }
+        return conn;
+    }
+
+    void Release(PGconn* conn) {
+        if (!conn) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (PQstatus(conn) != CONNECTION_OK) {
+            Logger::Warn("Connection pool found a dead connection in Release. Reconnecting...");
+            PQfinish(conn);
+            conn = PQconnectdb(conn_info_.c_str());
+            if (!conn || PQstatus(conn) != CONNECTION_OK) {
+                Logger::Error("Failed to reconnect connection in pool. Replacing with nullptr.");
+                if (conn) PQfinish(conn);
+                conn = nullptr;
+            }
+        }
+        pool_.push_back(conn);
+        cv_.notify_one();
+    }
+
+private:
+    std::string conn_info_;
+    size_t pool_size_;
+    std::vector<PGconn*> pool_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+};
+
+struct ConnLease {
+    DBManager::ConnectionPool& pool;
+    PGconn* conn;
+
+    ConnLease(DBManager::ConnectionPool& p) : pool(p), conn(p.Acquire()) {}
+    ~ConnLease() { pool.Release(conn); }
+
+    PGconn* get() const { return conn; }
+};
+
+DBManager::DBManager(const std::string& conn_info, SecureStorage& secure_storage)
+    : conn_info_(conn_info), secure_storage_(secure_storage) {
+    pool_ = std::make_unique<ConnectionPool>(conn_info_, 20);
+    Logger::Info("Connected to PostgreSQL with a connection pool (size=20).");
     Init();
 }
 
 DBManager::~DBManager() {
-    if (conn_) {
-        PQfinish(conn_);
-        conn_ = nullptr;
-    }
 }
 
-// =============================================================================
-// Internal Helpers (all return RAII-wrapped PGresultPtr)
-// =============================================================================
-
-void DBManager::Reconnect() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (conn_) {
-        PQfinish(conn_);
-        conn_ = nullptr;
-    }
-
-    Logger::Warn("PostgreSQL connection lost. Reconnecting...");
-    conn_ = PQconnectdb(conn_info_.c_str());
-    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
-        const std::string err = conn_ ? PQerrorMessage(conn_) : "PQconnectdb returned null";
-        if (conn_) {
-            PQfinish(conn_);
-            conn_ = nullptr;
+void DBManager::Execute(const std::string& sql, PGconn* conn) {
+    if (conn) {
+        PGresultPtr res(PQexec(conn, sql.c_str()));
+        ExecStatusType status = res ? PQresultStatus(res.get()) : PGRES_FATAL_ERROR;
+        if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
+            return;
         }
-        throw std::runtime_error("PostgreSQL reconnect failed: " + err);
+        const std::string err = conn ? PQerrorMessage(conn) : "null PostgreSQL connection";
+        throw std::runtime_error("SQL Execute error inside transaction: " + err + " | SQL: " + sql);
     }
 
-    Logger::Info("Reconnected to PostgreSQL.");
-}
-
-void DBManager::EnsureConnected() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
-        Reconnect();
-    }
-}
-
-void DBManager::Execute(const std::string& sql) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (int attempt = 0; attempt < 2; ++attempt) {
-        EnsureConnected();
+        ConnLease lease(*pool_);
+        PGconn* active_conn = lease.get();
+        if (!active_conn) {
+            if (attempt == 0) continue;
+            throw std::runtime_error("SQL Execute error: no active connection | SQL: " + sql);
+        }
 
-        PGresultPtr res(PQexec(conn_, sql.c_str()));
+        PGresultPtr res(PQexec(active_conn, sql.c_str()));
         ExecStatusType status = res ? PQresultStatus(res.get()) : PGRES_FATAL_ERROR;
         if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) {
             return;
         }
 
-        const bool should_retry = conn_ && PQstatus(conn_) != CONNECTION_OK && attempt == 0;
-        const std::string err = conn_ ? PQerrorMessage(conn_) : "null PostgreSQL connection";
+        const bool should_retry = active_conn && PQstatus(active_conn) != CONNECTION_OK && attempt == 0;
+        const std::string err = active_conn ? PQerrorMessage(active_conn) : "null PostgreSQL connection";
         if (!should_retry) {
             throw std::runtime_error("SQL Execute error: " + err + " | SQL: " + sql);
         }
-
-        Reconnect();
     }
 }
 
-PGresultPtr DBManager::Query(const std::string& sql) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        EnsureConnected();
+PGresultPtr DBManager::Query(const std::string& sql, PGconn* conn) {
+    if (conn) {
+        PGresultPtr res(PQexec(conn, sql.c_str()));
+        ExecStatusType status = res ? PQresultStatus(res.get()) : PGRES_FATAL_ERROR;
+        if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
+            return res;
+        }
+        const std::string err = conn ? PQerrorMessage(conn) : "null PostgreSQL connection";
+        throw std::runtime_error("SQL Query error inside transaction: " + err + " | SQL: " + sql);
+    }
 
-        PGresultPtr res(PQexec(conn_, sql.c_str()));
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        ConnLease lease(*pool_);
+        PGconn* active_conn = lease.get();
+        if (!active_conn) {
+            if (attempt == 0) continue;
+            throw std::runtime_error("SQL Query error: no active connection | SQL: " + sql);
+        }
+
+        PGresultPtr res(PQexec(active_conn, sql.c_str()));
         ExecStatusType status = res ? PQresultStatus(res.get()) : PGRES_FATAL_ERROR;
         if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
             return res;
         }
 
-        const bool should_retry = conn_ && PQstatus(conn_) != CONNECTION_OK && attempt == 0;
-        const std::string err = conn_ ? PQerrorMessage(conn_) : "null PostgreSQL connection";
+        const bool should_retry = active_conn && PQstatus(active_conn) != CONNECTION_OK && attempt == 0;
+        const std::string err = active_conn ? PQerrorMessage(active_conn) : "null PostgreSQL connection";
         if (!should_retry) {
             throw std::runtime_error("SQL Query error: " + err + " | SQL: " + sql);
         }
-
-        Reconnect();
     }
-
     throw std::runtime_error("SQL Query error: retry loop exhausted | SQL: " + sql);
 }
 
 PGresultPtr DBManager::QueryParams(const std::string& sql,
-                                    const std::vector<std::string>& params) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+                                    const std::vector<std::string>& params,
+                                    PGconn* conn) {
+    if (conn) {
+        std::vector<const char*> values;
+        values.reserve(params.size());
+        for (const auto& p : params) {
+            values.push_back(p.c_str());
+        }
+
+        PGresultPtr res(PQexecParams(conn, sql.c_str(),
+                                      static_cast<int>(params.size()),
+                                      nullptr,        // paramTypes (infer)
+                                      values.data(),
+                                      nullptr,        // paramLengths
+                                      nullptr,        // paramFormats
+                                      0));            // resultFormat (text)
+
+        ExecStatusType status = res ? PQresultStatus(res.get()) : PGRES_FATAL_ERROR;
+        if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK) {
+            return res;
+        }
+        const std::string err = conn ? PQerrorMessage(conn) : "null PostgreSQL connection";
+        throw std::runtime_error("SQL QueryParams error inside transaction: " + err + " | SQL: " + sql);
+    }
+
     for (int attempt = 0; attempt < 2; ++attempt) {
-        EnsureConnected();
+        ConnLease lease(*pool_);
+        PGconn* active_conn = lease.get();
+        if (!active_conn) {
+            if (attempt == 0) continue;
+            throw std::runtime_error("SQL QueryParams error: no active connection | SQL: " + sql);
+        }
 
         std::vector<const char*> values;
         values.reserve(params.size());
@@ -300,7 +419,7 @@ PGresultPtr DBManager::QueryParams(const std::string& sql,
             values.push_back(p.c_str());
         }
 
-        PGresultPtr res(PQexecParams(conn_, sql.c_str(),
+        PGresultPtr res(PQexecParams(active_conn, sql.c_str(),
                                       static_cast<int>(params.size()),
                                       nullptr,        // paramTypes (infer)
                                       values.data(),
@@ -313,15 +432,12 @@ PGresultPtr DBManager::QueryParams(const std::string& sql,
             return res;
         }
 
-        const bool should_retry = conn_ && PQstatus(conn_) != CONNECTION_OK && attempt == 0;
-        const std::string err = conn_ ? PQerrorMessage(conn_) : "null PostgreSQL connection";
+        const bool should_retry = active_conn && PQstatus(active_conn) != CONNECTION_OK && attempt == 0;
+        const std::string err = active_conn ? PQerrorMessage(active_conn) : "null PostgreSQL connection";
         if (!should_retry) {
             throw std::runtime_error("SQL QueryParams error: " + err + " | SQL: " + sql);
         }
-
-        Reconnect();
     }
-
     throw std::runtime_error("SQL QueryParams error: retry loop exhausted | SQL: " + sql);
 }
 
@@ -501,15 +617,118 @@ void DBManager::Init() {
     Execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolved_by_label TEXT DEFAULT '';");
     Execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolved_by_badge TEXT DEFAULT '';");
 
+    Execute("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";");
     Execute(
         "CREATE TABLE IF NOT EXISTS bans ("
-        "  target_hash TEXT PRIMARY KEY,"
-        "  reason TEXT NOT NULL DEFAULT '',"
-        "  banned_by_hash TEXT NOT NULL,"
-        "  banned_by_label TEXT DEFAULT '',"
-        "  banned_by_badge TEXT DEFAULT '',"
-        "  created_at TIMESTAMPTZ DEFAULT NOW(),"
-        "  updated_at TIMESTAMPTZ DEFAULT NOW()"
+        "  target_identifier TEXT PRIMARY KEY,"
+        "  ban_type TEXT DEFAULT 'identity',"
+        "  reason TEXT DEFAULT '',"
+        "  expires_at TIMESTAMPTZ,"
+        "  created_by TEXT,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+    try {
+        Execute("ALTER TABLE bans DROP CONSTRAINT IF EXISTS bans_pkey CASCADE;");
+    } catch (...) {}
+    Execute("ALTER TABLE bans ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();");
+    Execute("ALTER TABLE bans ADD COLUMN IF NOT EXISTS target_identifier TEXT;");
+    Execute("ALTER TABLE bans ADD COLUMN IF NOT EXISTS ban_type TEXT DEFAULT 'identity';");
+    Execute("ALTER TABLE bans ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;");
+    Execute("ALTER TABLE bans ADD COLUMN IF NOT EXISTS created_by TEXT;");
+
+    try {
+        Execute("DELETE FROM bans WHERE target_identifier IS NULL AND target_hash IS NOT NULL;");
+    } catch (...) {}
+    try {
+        Execute("ALTER TABLE bans ALTER COLUMN target_identifier SET NOT NULL;");
+    } catch (...) {}
+    try {
+        Execute("ALTER TABLE bans ADD PRIMARY KEY (id);");
+    } catch (...) {}
+    try {
+        Execute("ALTER TABLE bans ADD CONSTRAINT bans_target_identifier_unique UNIQUE (target_identifier);");
+    } catch (...) {}
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS notification_queue ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  user_hash TEXT NOT NULL,"
+        "  actor_hash TEXT DEFAULT '',"
+        "  type TEXT NOT NULL,"
+        "  title TEXT NOT NULL,"
+        "  body TEXT DEFAULT '',"
+        "  link TEXT DEFAULT '',"
+        "  retry_count INT NOT NULL DEFAULT 0,"
+        "  next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+        "  status TEXT NOT NULL DEFAULT 'pending',"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS moderation_queue ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  report_id BIGINT REFERENCES reports(id) ON DELETE CASCADE,"
+        "  status TEXT NOT NULL DEFAULT 'pending',"
+        "  assigned_to TEXT,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS moderation_log ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  actor_hash TEXT NOT NULL,"
+        "  action TEXT NOT NULL,"
+        "  summary TEXT NOT NULL,"
+        "  target_hash TEXT,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS api_keys ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  user_hash TEXT UNIQUE NOT NULL,"
+        "  api_key TEXT UNIQUE NOT NULL,"
+        "  tier TEXT NOT NULL,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+
+    Execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS subscription_tier TEXT DEFAULT 'none';");
+    Execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ;");
+    Execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS custom_badge TEXT DEFAULT '';");
+    Execute("ALTER TABLE profiles ADD COLUMN IF NOT EXISTS unlocked_tags TEXT DEFAULT '';");
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS groups ("
+        "  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),"
+        "  name TEXT NOT NULL,"
+        "  created_by TEXT NOT NULL,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
+        ");"
+    );
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS group_members ("
+        "  group_id UUID REFERENCES groups(id) ON DELETE CASCADE,"
+        "  user_hash TEXT NOT NULL,"
+        "  encrypted_group_key TEXT NOT NULL,"
+        "  role TEXT NOT NULL DEFAULT 'member',"
+        "  joined_at TIMESTAMPTZ DEFAULT NOW(),"
+        "  PRIMARY KEY (group_id, user_hash)"
+        ");"
+    );
+
+    Execute(
+        "CREATE TABLE IF NOT EXISTS group_messages ("
+        "  id BIGSERIAL PRIMARY KEY,"
+        "  group_id UUID REFERENCES groups(id) ON DELETE CASCADE,"
+        "  sender_hash TEXT NOT NULL,"
+        "  encrypted_content TEXT NOT NULL,"
+        "  created_at TIMESTAMPTZ DEFAULT NOW()"
         ");"
     );
 
@@ -544,10 +763,17 @@ void DBManager::Init() {
     Execute("CREATE INDEX IF NOT EXISTS idx_message_requests_requester ON message_requests(requester_hash, status, last_message_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_hash, blocked_hash);");
     Execute("CREATE INDEX IF NOT EXISTS idx_posts_author_hash ON posts(author_hash, created_at DESC);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_profiles_lower_username ON profiles(LOWER(username));");
+    Execute("CREATE INDEX IF NOT EXISTS idx_direct_messages_reverse ON direct_messages(receiver_hash, sender_hash, created_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_hash, read_at, created_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_reports_target ON reports(target_hash, status, created_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_reports_post ON reports(target_post_id, status, created_at DESC);");
-    Execute("CREATE INDEX IF NOT EXISTS idx_bans_target ON bans(target_hash);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_bans_target_identifier ON bans(target_identifier);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_notification_queue_status ON notification_queue(status, next_retry_at);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(user_hash);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(api_key);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_hash);");
+    Execute("CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_moderation_events_created ON moderation_events(created_at DESC);");
     Execute("CREATE INDEX IF NOT EXISTS idx_moderation_events_actor ON moderation_events(actor_hash, created_at DESC);");
 
@@ -614,6 +840,7 @@ void DBManager::Init() {
     }
 
     SeedBoards();
+    StartNotificationWorker();
 }
 
 // =============================================================================
@@ -621,8 +848,6 @@ void DBManager::Init() {
 // =============================================================================
 
 int64_t DBManager::InsertMessage(const std::string& message) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-
     std::string encrypted = secure_storage_.Encrypt(message);
 
     // Use PQexecParams with binary data for the BYTEA blob
@@ -630,20 +855,22 @@ int64_t DBManager::InsertMessage(const std::string& message) {
     int paramLengths[1] = { static_cast<int>(encrypted.size()) };
     int paramFormats[1] = { 1 }; // binary
 
-    PGresultPtr res(PQexecParams(conn_,
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) throw std::runtime_error("InsertMessage failed: database connection unavailable");
+
+    PGresultPtr res(PQexecParams(conn,
         "INSERT INTO messages (data) VALUES ($1) RETURNING id",
         1, nullptr, paramValues, paramLengths, paramFormats, 0));
 
     if (PQresultStatus(res.get()) != PGRES_TUPLES_OK) {
-        throw std::runtime_error("InsertMessage failed: " + std::string(PQerrorMessage(conn_)));
+        throw std::runtime_error("InsertMessage failed: " + std::string(PQerrorMessage(conn)));
     }
 
     return std::stoll(PQgetvalue(res.get(), 0, 0));
 }
 
 std::string DBManager::GetMessage(int64_t id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-
     std::string id_str = std::to_string(id);
     PGresultPtr res = QueryParams(
         "SELECT data FROM messages WHERE id = $1", {id_str});
@@ -672,11 +899,14 @@ std::string DBManager::GetMessage(int64_t id) {
 }
 
 void DBManager::ReEncryptAll() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
     Logger::Info("Starting database re-encryption...");
 
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) throw std::runtime_error("ReEncryptAll failed: database connection unavailable");
+
     // 1. Read all data
-    PGresultPtr select_res = Query("SELECT id, data FROM messages");
+    PGresultPtr select_res = Query("SELECT id, data FROM messages", conn);
     int rows = PQntuples(select_res.get());
 
     std::vector<std::pair<int64_t, std::string>> plaintext_rows;
@@ -716,7 +946,7 @@ void DBManager::ReEncryptAll() {
     std::string tmp_key_path = key_path + ".tmp";
     SecureStorage::SaveKey(tmp_key_path, new_key);
 
-    Execute("BEGIN");
+    Execute("BEGIN", conn);
     try {
         for (const auto& row : encrypted_rows) {
             const char* paramValues[2];
@@ -726,16 +956,16 @@ void DBManager::ReEncryptAll() {
             int paramLengths[2] = { static_cast<int>(row.second.size()), 0 };
             int paramFormats[2] = { 1, 0 }; // blob binary, id text
 
-            PGresultPtr upd(PQexecParams(conn_,
+            PGresultPtr upd(PQexecParams(conn,
                 "UPDATE messages SET data = $1 WHERE id = $2",
                 2, nullptr, paramValues, paramLengths, paramFormats, 0));
             if (PQresultStatus(upd.get()) != PGRES_COMMAND_OK) {
                 throw std::runtime_error("Failed to update row " + id_str);
             }
         }
-        Execute("COMMIT");
+        Execute("COMMIT", conn);
     } catch (...) {
-        Execute("ROLLBACK");
+        Execute("ROLLBACK", conn);
         secure_storage_.SetKey(old_key);
         throw;
     }
@@ -767,7 +997,7 @@ std::string DBManager::GetBoardIdForThread(int64_t thread_id) {
 // =============================================================================
 
 json DBManager::GetAllBoards() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     json boards = json::array();
 
     PGresultPtr res = Query(
@@ -792,7 +1022,7 @@ json DBManager::GetAllBoards() {
 }
 
 json DBManager::GetBoard(const std::string& board_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     json board;
 
     PGresultPtr res = QueryParams(
@@ -818,7 +1048,7 @@ json DBManager::GetBoard(const std::string& board_id) {
 // =============================================================================
 
 json DBManager::GetThreads(const std::string& board_id, int page, int limit, bool archived) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     json result;
     json threads = json::array();
 
@@ -861,8 +1091,10 @@ json DBManager::GetThreads(const std::string& board_id, int page, int limit, boo
 
         // Get OP post for this thread
         PGresultPtr op_res = QueryParams(
-            "SELECT id, content, encrypted_content, is_encrypted, image_url, name, created_at "
-            "FROM posts WHERE thread_id = $1 AND is_op = TRUE LIMIT 1", {tid});
+            "SELECT p.id, p.content, p.encrypted_content, p.is_encrypted, p.image_url, p.name, p.created_at, "
+            "  COALESCE(CASE WHEN pr.subscription_tier IS NOT NULL AND pr.subscription_tier != '' AND pr.subscription_tier != 'none' AND (pr.subscription_expires_at IS NULL OR pr.subscription_expires_at > NOW()) THEN pr.subscription_tier ELSE '' END, '') AS active_sub_tier, "
+            "  COALESCE(pr.custom_badge, '') AS custom_badge "
+            "FROM posts p LEFT JOIN profiles pr ON p.author_hash = pr.pub_key_hash WHERE p.thread_id = $1 AND p.is_op = TRUE LIMIT 1", {tid});
 
         if (PQntuples(op_res.get()) > 0) {
             json op;
@@ -873,6 +1105,8 @@ json DBManager::GetThreads(const std::string& board_id, int page, int limit, boo
             op["imageUrl"]         = PQgetisnull(op_res.get(), 0, 4) ? nullptr : json(PQgetvalue(op_res.get(), 0, 4));
             op["name"]             = PQgetvalue(op_res.get(), 0, 5);
             op["createdAt"]        = PQgetvalue(op_res.get(), 0, 6);
+            op["subscriptionTier"] = PQgetvalue(op_res.get(), 0, 7);
+            op["customBadge"]      = PQgetvalue(op_res.get(), 0, 8);
             thread["op"] = op;
         }
 
@@ -888,7 +1122,7 @@ json DBManager::GetThreads(const std::string& board_id, int page, int limit, boo
 }
 
 json DBManager::GetThread(int64_t thread_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     json result;
 
     std::string tid = std::to_string(thread_id);
@@ -909,9 +1143,11 @@ json DBManager::GetThread(int64_t thread_id) {
 
     // Get all posts
     PGresultPtr post_res = QueryParams(
-        "SELECT id, content, encrypted_content, is_encrypted, image_url, name, "
-        "  tripcode, sage, is_op, created_at "
-        "FROM posts WHERE thread_id = $1 ORDER BY created_at ASC", {tid});
+        "SELECT p.id, p.content, p.encrypted_content, p.is_encrypted, p.image_url, p.name, "
+        "  p.tripcode, p.sage, p.is_op, p.created_at, "
+        "  COALESCE(CASE WHEN pr.subscription_tier IS NOT NULL AND pr.subscription_tier != '' AND pr.subscription_tier != 'none' AND (pr.subscription_expires_at IS NULL OR pr.subscription_expires_at > NOW()) THEN pr.subscription_tier ELSE '' END, '') AS active_sub_tier, "
+        "  COALESCE(pr.custom_badge, '') AS custom_badge "
+        "FROM posts p LEFT JOIN profiles pr ON p.author_hash = pr.pub_key_hash WHERE p.thread_id = $1 ORDER BY p.created_at ASC", {tid});
 
     json op = nullptr;
     json replies = json::array();
@@ -929,6 +1165,8 @@ json DBManager::GetThread(int64_t thread_id) {
         post["sage"]             = std::string(PQgetvalue(post_res.get(), i, 7)) == "t";
         post["isOP"]             = std::string(PQgetvalue(post_res.get(), i, 8)) == "t";
         post["createdAt"]        = PQgetvalue(post_res.get(), i, 9);
+        post["subscriptionTier"] = PQgetvalue(post_res.get(), i, 10);
+        post["customBadge"]      = PQgetvalue(post_res.get(), i, 11);
 
         if (post["isOP"].get<bool>()) {
             op = post;
@@ -947,7 +1185,10 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
                              const std::string& content, const std::string& name,
                              const std::string& image_url, const std::string& encrypted_content,
                              const std::string& author_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) throw std::runtime_error("CreateThread failed: database connection unavailable");
+
     const std::string author = ResolveExistingProfileHash(author_hash);
     std::string ban_reason;
     if (!author.empty() && IsProfileBanned(author, &ban_reason)) {
@@ -957,7 +1198,7 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
     std::string subj = subject.empty() ? "No Subject" : subject;
     PGresultPtr thread_res = QueryParams(
         "INSERT INTO threads (board_id, subject) VALUES ($1, $2) RETURNING id",
-        {board_id, subj});
+        {board_id, subj}, conn);
     int64_t thread_id = std::stoll(PQgetvalue(thread_res.get(), 0, 0));
 
     // Insert OP post
@@ -984,13 +1225,13 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
     pv[7] = author.empty() ? nullptr : author.c_str();
     pv[8] = "true";
 
-    PGresultPtr post_res(PQexecParams(conn_,
+    PGresultPtr post_res(PQexecParams(conn,
         "INSERT INTO posts (thread_id, board_id, content, encrypted_content, is_encrypted, image_url, name, author_hash, is_op) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, ''), $9) RETURNING id",
         9, nullptr, pv, nullptr, nullptr, 0));
 
     if (PQresultStatus(post_res.get()) != PGRES_TUPLES_OK) {
-        throw std::runtime_error("Failed to insert OP post: " + std::string(PQerrorMessage(conn_)));
+        throw std::runtime_error("Failed to insert OP post: " + std::string(PQerrorMessage(conn)));
     }
     int64_t post_id = std::stoll(PQgetvalue(post_res.get(), 0, 0));
 
@@ -1012,7 +1253,7 @@ json DBManager::CreateThread(const std::string& board_id, const std::string& sub
 }
 
 void DBManager::ArchiveThread(int64_t thread_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     std::string tid = std::to_string(thread_id);
     QueryParams("UPDATE threads SET archived = TRUE WHERE id = $1", {tid});
 }
@@ -1025,7 +1266,9 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
                            const std::string& name, const std::string& image_url,
                            const std::string& encrypted_content, bool sage,
                            const std::string& author_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) throw std::runtime_error("CreatePost failed: database connection unavailable");
 
     std::string bid = GetBoardIdForThread(thread_id);
     if (bid.empty()) throw std::runtime_error("Thread not found");
@@ -1037,7 +1280,7 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
 
     // Check locked
     std::string tid = std::to_string(thread_id);
-    PGresultPtr lock_res = QueryParams("SELECT locked FROM threads WHERE id = $1", {tid});
+    PGresultPtr lock_res = QueryParams("SELECT locked FROM threads WHERE id = $1", {tid}, conn);
     if (PQntuples(lock_res.get()) > 0 && std::string(PQgetvalue(lock_res.get(), 0, 0)) == "t") {
         throw std::runtime_error("Thread is locked");
     }
@@ -1059,13 +1302,13 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
     pv[7] = sage_flag.c_str();
     pv[8] = author.empty() ? nullptr : author.c_str();
 
-    PGresultPtr res(PQexecParams(conn_,
+    PGresultPtr res(PQexecParams(conn,
         "INSERT INTO posts (thread_id, board_id, content, encrypted_content, is_encrypted, image_url, name, sage, author_hash) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, '')) RETURNING id",
         9, nullptr, pv, nullptr, nullptr, 0));
 
     if (PQresultStatus(res.get()) != PGRES_TUPLES_OK) {
-        throw std::runtime_error("Failed to insert post: " + std::string(PQerrorMessage(conn_)));
+        throw std::runtime_error("Failed to insert post: " + std::string(PQerrorMessage(conn)));
     }
     int64_t post_id = std::stoll(PQgetvalue(res.get(), 0, 0));
 
@@ -1090,7 +1333,7 @@ json DBManager::CreatePost(int64_t thread_id, const std::string& content,
 // =============================================================================
 
 json DBManager::GetStats() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     json result;
 
     auto count = [&](const std::string& table) -> int {
@@ -1131,7 +1374,8 @@ json DBManager::GetProfile(const std::string& pub_key_hash) {
             "       COALESCE(role, 'user'), COALESCE(role_assigned_by, ''), "
             "       COALESCE((EXTRACT(EPOCH FROM founder_claimed_at) * 1000)::BIGINT::TEXT, ''), "
             "       CASE WHEN COALESCE(recovery_bundle_ciphertext, '') <> '' THEN 'true' ELSE 'false' END, "
-            "       COALESCE((EXTRACT(EPOCH FROM role_assigned_at) * 1000)::BIGINT::TEXT, '') "
+            "       COALESCE((EXTRACT(EPOCH FROM role_assigned_at) * 1000)::BIGINT::TEXT, ''), "
+            "       COALESCE(custom_badge, ''), COALESCE(unlocked_tags, '') "
             "FROM profiles WHERE pub_key_hash = $1",
             {resolved_hash}
         );
@@ -1150,6 +1394,8 @@ json DBManager::GetProfile(const std::string& pub_key_hash) {
             profile["founder_claimed_at"] = PQgetvalue(res.get(), 0, 11);
             profile["recovery_configured"] = std::string(PQgetvalue(res.get(), 0, 12)) == "true";
             profile["role_assigned_at"] = PQgetvalue(res.get(), 0, 13);
+            profile["custom_badge"] = PQgetvalue(res.get(), 0, 14);
+            profile["unlocked_tags"] = PQgetvalue(res.get(), 0, 15);
             std::string assigned_by = profile["role_assigned_by"].get<std::string>();
             profile["role_assigned_by_username"] = assigned_by.empty() ? "" : ResolveProfileUsername(assigned_by);
             profile["role_badge"] = GetRoleBadge(resolved_hash, profile["role"].get<std::string>());
@@ -1170,6 +1416,8 @@ json DBManager::GetProfile(const std::string& pub_key_hash) {
             profile["recovery_configured"] = false;
             profile["role_assigned_at"] = "";
             profile["role_badge"] = "USER";
+            profile["custom_badge"] = "";
+            profile["unlocked_tags"] = "";
         }
     }
     profile["banned"] = IsProfileBanned(resolved_hash);
@@ -1215,7 +1463,7 @@ void DBManager::UpdateProfile(const std::string& pub_key_hash, const std::string
                              const std::string& recovery_lookup_hash,
                              const std::string& recovery_bundle_ciphertext,
                              const std::string& recovery_bundle_iv) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     std::string normalized_username = "";
     if (!username.empty()) {
@@ -1282,7 +1530,7 @@ void DBManager::UpdateProfile(const std::string& pub_key_hash, const std::string
 }
 
 json DBManager::GetRecoveryBundle(const std::string& recovery_lookup_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string trimmed_lookup = TrimCopy(recovery_lookup_hash);
     if (trimmed_lookup.empty()) {
@@ -1313,7 +1561,7 @@ json DBManager::GetRecoveryBundle(const std::string& recovery_lookup_hash) {
 }
 
 json DBManager::ClaimFounderRole(const std::string& pub_key_hash, const std::string& founder_session_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string resolved_hash = ResolveProfileHash(pub_key_hash);
     if (resolved_hash.empty()) {
@@ -1356,9 +1604,52 @@ json DBManager::ClaimFounderRole(const std::string& pub_key_hash, const std::str
     };
 }
 
+json DBManager::AdminLogin(const std::string& actor_hash, const std::string& founder_token, std::string& out_session_id) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty()) {
+        return {{"error", "Actor profile hash required"}};
+    }
+    if (founder_token.empty()) {
+        return {{"error", "Founder token required"}};
+    }
+
+    PGresultPtr res = QueryParams(
+        "SELECT role, founder_session_hash FROM profiles WHERE pub_key_hash = $1 LIMIT 1",
+        {actor}
+    );
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Actor profile not found"}};
+    }
+
+    std::string role = PQgetvalue(res.get(), 0, 0);
+    std::string founder_session_hash = PQgetvalue(res.get(), 0, 1);
+
+    if (role != "founder") {
+        return {{"error", "Actor is not the founder"}};
+    }
+
+    std::string hashed_token = sha256_hex(founder_token);
+    if (hashed_token != founder_session_hash) {
+        return {{"error", "Invalid founder token"}};
+    }
+
+    std::string session_id = GenerateRandomHex(32);
+    std::string hashed_session = sha256_hex(session_id);
+
+    QueryParams(
+        "UPDATE profiles SET active_session_hash = $2, session_expires_at = NOW() + INTERVAL '24 hours' WHERE pub_key_hash = $1",
+        {actor, hashed_session}
+    );
+
+    out_session_id = session_id;
+    return {{"status", "success"}};
+}
+
 json DBManager::SetProfileRole(const std::string& actor_hash, const std::string& founder_session_hash,
                                const std::string& target_hash, const std::string& role) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string target = ResolveProfileHash(target_hash);
@@ -1442,6 +1733,49 @@ json DBManager::SetProfileRole(const std::string& actor_hash, const std::string&
     };
 }
 
+json DBManager::GiftUser(const std::string& actor_hash, const std::string& founder_session_cookie,
+                         const std::string& target_hash, const std::string& gift_type,
+                         const std::string& gift_value, int duration_days) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie, true)) {
+        return {{"error", "Founder authorization failed"}};
+    }
+    const std::string target = ResolveExistingProfileHash(target_hash);
+    if (target.empty()) {
+        return {{"error", "Target profile not found"}};
+    }
+
+    const std::string normalized_gift_type = TrimCopy(gift_type);
+    const std::string normalized_gift_value = TrimCopy(gift_value);
+
+    if (normalized_gift_type == "tag") {
+        if (normalized_gift_value.empty() || normalized_gift_value == "clear" || normalized_gift_value == "none") {
+            QueryParams(
+                "UPDATE profiles SET custom_badge = '' WHERE pub_key_hash = $1",
+                {target}
+            );
+            CreateNotification(target, actor, "gift_received", "Badge Cleared",
+                               "The founder cleared your custom badge.", "/u/" + target);
+            CreateModerationEvent(actor, "clear_tag", "Cleared custom badge from " + target, target);
+        } else {
+            AddProfileTag(target, normalized_gift_value);
+            CreateNotification(target, actor, "gift_received", "Special Gift Received",
+                               "The founder gifted you the tag: " + normalized_gift_value, "/u/" + target);
+            CreateModerationEvent(actor, "gift_tag", "Gifted custom badge: " + normalized_gift_value + " to " + target, target);
+        }
+        return {{"status", "success"}};
+    } else if (normalized_gift_type == "subscription") {
+        UpdateProfileSubscription(target, normalized_gift_value, duration_days);
+        CreateNotification(target, actor, "gift_received", "Special Gift Received",
+                           "The founder gifted you a " + normalized_gift_value + " subscription!", "/u/" + target);
+        CreateModerationEvent(actor, "gift_subscription", "Gifted subscription: " + normalized_gift_value + " to " + target, target);
+        return {{"status", "success"}};
+    } else {
+        return {{"error", "Invalid gift type"}};
+    }
+}
+
 json DBManager::InteractPost(int64_t post_id, const std::string& pub_key_hash, int type) {
     std::string type_str = std::to_string(type);
     std::string post_id_str = std::to_string(post_id);
@@ -1471,7 +1805,7 @@ json DBManager::InteractPost(int64_t post_id, const std::string& pub_key_hash, i
 }
 
 json DBManager::SendFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1530,7 +1864,7 @@ json DBManager::SendFriendRequest(const std::string& sender_hash, const std::str
 }
 
 json DBManager::AcceptFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1558,7 +1892,7 @@ json DBManager::AcceptFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::RejectFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1585,7 +1919,7 @@ json DBManager::RejectFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::CancelFriendRequest(const std::string& sender_hash, const std::string& receiver_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string s = ResolveExistingProfileHash(sender_hash);
     const std::string r = ResolveExistingProfileHash(receiver_hash);
@@ -1601,7 +1935,7 @@ json DBManager::CancelFriendRequest(const std::string& sender_hash, const std::s
 }
 
 json DBManager::RemoveFriend(const std::string& user_hash, const std::string& peer_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     const std::string peer = ResolveExistingProfileHash(peer_hash);
@@ -1618,7 +1952,7 @@ json DBManager::RemoveFriend(const std::string& user_hash, const std::string& pe
 }
 
 json DBManager::GetFriends(const std::string& pub_key_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string resolved_hash = ResolveExistingProfileHash(pub_key_hash);
     if (resolved_hash.empty()) {
@@ -1684,7 +2018,7 @@ json DBManager::GetFriends(const std::string& pub_key_hash) {
 }
 
 json DBManager::BlockUser(const std::string& blocker_hash, const std::string& blocked_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string blocker = ResolveExistingProfileHash(blocker_hash);
     const std::string blocked = ResolveExistingProfileHash(blocked_hash);
@@ -1719,7 +2053,7 @@ json DBManager::BlockUser(const std::string& blocker_hash, const std::string& bl
 }
 
 json DBManager::UnblockUser(const std::string& blocker_hash, const std::string& blocked_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string blocker = ResolveExistingProfileHash(blocker_hash);
     const std::string blocked = ResolveExistingProfileHash(blocked_hash);
@@ -1742,7 +2076,7 @@ json DBManager::UnblockUser(const std::string& blocker_hash, const std::string& 
 
 json DBManager::CreateDirectMessage(const std::string& sender_hash, const std::string& receiver_hash,
                                     const std::string& content, const std::string& image_url) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     std::string sender = ResolveExistingProfileHash(sender_hash, true);
     std::string receiver = ResolveExistingProfileHash(receiver_hash, true);
@@ -1842,7 +2176,7 @@ json DBManager::CreateDirectMessage(const std::string& sender_hash, const std::s
 }
 
 json DBManager::GetDirectMessages(const std::string& user_hash, const std::string& peer_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     std::string me = ResolveExistingProfileHash(user_hash, true);
     std::string peer = ResolveExistingProfileHash(peer_hash, true);
@@ -1911,7 +2245,7 @@ json DBManager::GetDirectMessages(const std::string& user_hash, const std::strin
 }
 
 json DBManager::GetDirectMessageInbox(const std::string& user_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     std::string me = ResolveExistingProfileHash(user_hash, true);
     if (me.empty()) {
@@ -1923,48 +2257,51 @@ json DBManager::GetDirectMessageInbox(const std::string& user_hash) {
     }
 
     PGresultPtr res = QueryParams(
-        "SELECT id, sender_hash, receiver_hash, COALESCE(content, ''), COALESCE(image_url, ''), "
-        "       (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT "
-        "FROM direct_messages "
-        "WHERE sender_hash = $1 OR receiver_hash = $1 "
-        "ORDER BY created_at DESC, id DESC",
+        "SELECT DISTINCT ON (peer) "
+        "       peer, "
+        "       COALESCE(p.username, 'Anonymous'), "
+        "       dm.id, "
+        "       dm.sender_hash, "
+        "       dm.receiver_hash, "
+        "       COALESCE(dm.content, ''), "
+        "       COALESCE(dm.image_url, ''), "
+        "       (EXTRACT(EPOCH FROM dm.created_at) * 1000)::BIGINT, "
+        "       (SELECT COUNT(*) FROM direct_messages WHERE sender_hash = peer AND receiver_hash = $1 AND read_at IS NULL) "
+        "FROM ("
+        "    SELECT id, sender_hash, receiver_hash, content, image_url, created_at, "
+        "           CASE WHEN sender_hash = $1 THEN receiver_hash ELSE sender_hash END as peer "
+        "    FROM direct_messages "
+        "    WHERE sender_hash = $1 OR receiver_hash = $1 "
+        ") dm "
+        "LEFT JOIN profiles p ON dm.peer = p.pub_key_hash "
+        "ORDER BY peer, dm.created_at DESC, dm.id DESC",
         {me}
     );
 
-    std::unordered_set<std::string> seen;
     json conversations = json::array();
     int rows = PQntuples(res.get());
     for (int i = 0; i < rows; ++i) {
-        std::string sender = PQgetvalue(res.get(), i, 1);
-        std::string receiver = PQgetvalue(res.get(), i, 2);
-        std::string peer = sender == me ? receiver : sender;
-
-        if (seen.count(peer) > 0) {
-            continue;
-        }
+        std::string peer = PQgetvalue(res.get(), i, 0);
         const bool accepted_channel = peer == "admin"
             || HasAcceptedFriendship(me, peer)
             || HasAcceptedMessageChannel(me, peer);
         if (!accepted_channel) {
             continue;
         }
-        seen.insert(peer);
 
-        const std::string stored_content = PQgetvalue(res.get(), i, 3);
-        const std::string stored_image_url = PQgetvalue(res.get(), i, 4);
+        std::string username = PQgetvalue(res.get(), i, 1);
+        std::string sender = PQgetvalue(res.get(), i, 3);
+        std::string receiver = PQgetvalue(res.get(), i, 4);
+        std::string stored_content = PQgetvalue(res.get(), i, 5);
+        std::string stored_image_url = PQgetvalue(res.get(), i, 6);
         std::string preview = BuildDirectMessagePreview(sender, receiver, stored_content, stored_image_url, secure_storage_);
-
-        PGresultPtr unread_res = QueryParams(
-            "SELECT COUNT(*) FROM direct_messages WHERE sender_hash = $1 AND receiver_hash = $2 AND read_at IS NULL",
-            {peer, me}
-        );
-        const int unread_count = std::stoi(PQgetvalue(unread_res.get(), 0, 0));
+        int unread_count = std::stoi(PQgetvalue(res.get(), i, 8));
 
         conversations.push_back({
             {"hash", peer},
-            {"username", ResolveProfileUsername(peer)},
+            {"username", username},
             {"lastMessage", preview},
-            {"lastTimestamp", std::stoll(PQgetvalue(res.get(), i, 5))},
+            {"lastTimestamp", std::stoll(PQgetvalue(res.get(), i, 7))},
             {"unreadCount", unread_count}
         });
     }
@@ -2045,7 +2382,7 @@ json DBManager::RespondToMessageRequest(const std::string& actor_hash, const std
         return BlockUser(actor_hash, requester_hash);
     }
 
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveExistingProfileHash(actor_hash);
     const std::string requester = ResolveExistingProfileHash(requester_hash);
@@ -2099,7 +2436,7 @@ json DBManager::RespondToMessageRequest(const std::string& actor_hash, const std
 }
 
 json DBManager::GetNotifications(const std::string& user_hash, int limit) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2134,7 +2471,7 @@ json DBManager::GetNotifications(const std::string& user_hash, int limit) {
 }
 
 json DBManager::MarkNotificationsRead(const std::string& user_hash, const std::string& notification_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2157,7 +2494,7 @@ json DBManager::MarkNotificationsRead(const std::string& user_hash, const std::s
 }
 
 json DBManager::GetNotificationSummary(const std::string& user_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string user = ResolveExistingProfileHash(user_hash);
     if (user.empty()) {
@@ -2217,7 +2554,7 @@ json DBManager::CreateReport(const std::string& reporter_hash, const std::string
                              const std::string& target_kind, int64_t target_post_id, int64_t target_thread_id,
                              const std::string& target_board_id, const std::string& target_display_name,
                              const std::string& context_link) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string reporter = ResolveExistingProfileHash(reporter_hash);
     const std::string normalized_kind = TrimCopy(target_kind).empty() ? "user" : TrimCopy(target_kind);
@@ -2319,7 +2656,7 @@ json DBManager::CreateReport(const std::string& reporter_hash, const std::string
 }
 
 json DBManager::GetModerationReports(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
@@ -2370,7 +2707,7 @@ json DBManager::GetModerationReports(const std::string& actor_hash, const std::s
 }
 
 json DBManager::GetModerationAudit(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
@@ -2429,7 +2766,7 @@ json DBManager::GetModerationAudit(const std::string& actor_hash, const std::str
 
 json DBManager::ResolveModerationReport(const std::string& actor_hash, const std::string& founder_session_hash,
                                         int64_t report_id, const std::string& status, const std::string& note) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string normalized_status = TrimCopy(status);
@@ -2490,63 +2827,27 @@ json DBManager::ResolveModerationReport(const std::string& actor_hash, const std
     return {{"status", normalized_status}, {"id", report_id}, {"resolvedBy", actor}};
 }
 
-json DBManager::BanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_hash,
+json DBManager::BanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_cookie,
                                    const std::string& target_hash, const std::string& reason) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-
-    const std::string actor = ResolveProfileHash(actor_hash);
-    const std::string target = ResolveExistingProfileHash(target_hash);
-    const std::string trimmed_reason = TrimCopy(reason);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
-        return {{"error", "Moderator authorization failed"}};
-    }
-    if (target.empty()) {
-        return {{"error", "Target profile not found"}};
-    }
-
-    PGresultPtr target_role = QueryParams(
-        "SELECT COALESCE(role, 'user') FROM profiles WHERE pub_key_hash = $1 LIMIT 1",
-        {target}
-    );
-    const std::string normalized_target_role = PQntuples(target_role.get()) > 0
-        ? NormalizeRole(PQgetvalue(target_role.get(), 0, 0))
-        : "user";
-    if (normalized_target_role == "founder" || normalized_target_role == "moderator") {
-        return {{"error", "Moderator identities cannot be banned from the UI"}};
-    }
-
-    QueryParams(
-        "INSERT INTO bans (target_hash, reason, banned_by_hash, banned_by_label, banned_by_badge, created_at, updated_at) "
-        "VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) "
-        "ON CONFLICT (target_hash) DO UPDATE SET "
-        "reason = EXCLUDED.reason, banned_by_hash = EXCLUDED.banned_by_hash, "
-        "banned_by_label = EXCLUDED.banned_by_label, banned_by_badge = EXCLUDED.banned_by_badge, updated_at = NOW()",
-        {target, trimmed_reason, actor, ResolveProfileUsername(actor), GetRoleBadge(actor)}
-    );
-
-    CreateNotification(target, actor, "moderation_ban", "Account restricted",
-                       trimmed_reason.empty() ? "Your identity has been restricted by moderation." : trimmed_reason,
-                       "/u/" + target);
-    CreateModerationEvent(actor, "ban_user",
-                          "Banned " + ResolveProfileUsername(target) + ".",
-                          target);
-    return {{"status", "banned"}, {"target_hash", target}};
+    return BanUser(actor_hash, founder_session_cookie, target_hash, "identity", reason, 0);
 }
 
-json DBManager::UnbanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_hash,
+json DBManager::UnbanUserAsModerator(const std::string& actor_hash, const std::string& founder_session_cookie,
                                      const std::string& target_hash) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
     const std::string actor = ResolveProfileHash(actor_hash);
-    const std::string target = ResolveExistingProfileHash(target_hash);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
         return {{"error", "Moderator authorization failed"}};
     }
+    const std::string target = ResolveExistingProfileHash(target_hash);
     if (target.empty()) {
         return {{"error", "Target profile not found"}};
     }
 
-    QueryParams("DELETE FROM bans WHERE target_hash = $1", {target});
+    std::string salt = Config::Instance().Get().server_salt;
+    std::string hashed_target = sha256_hex(target + salt);
+
+    QueryParams("DELETE FROM bans WHERE target_identifier = $1", {hashed_target});
     CreateNotification(target, actor, "moderation_unban", "Account restriction lifted",
                        "Your identity is no longer restricted by moderation.",
                        "/u/" + target);
@@ -2556,11 +2857,194 @@ json DBManager::UnbanUserAsModerator(const std::string& actor_hash, const std::s
     return {{"status", "unbanned"}, {"target_hash", target}};
 }
 
-json DBManager::DeletePostAsModerator(const std::string& actor_hash, const std::string& founder_session_hash, int64_t post_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+json DBManager::BanUser(const std::string& actor_hash, const std::string& founder_session_cookie,
+                        const std::string& target, const std::string& ban_type,
+                        const std::string& reason, int64_t duration_seconds) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
+        return {{"error", "Moderator authorization failed"}};
+    }
+
+    std::string trimmed_target = TrimCopy(target);
+    std::string trimmed_reason = TrimCopy(reason);
+    std::string trimmed_type = TrimCopy(ban_type);
+
+    if (trimmed_target.empty() || trimmed_type.empty()) {
+        return {{"error", "Target and ban_type are required"}};
+    }
+
+    if (trimmed_type != "identity" && trimmed_type != "ip") {
+        return {{"error", "Invalid ban_type (must be 'identity' or 'ip')"}};
+    }
+
+    if (trimmed_type == "identity") {
+        const std::string resolved_target = ResolveExistingProfileHash(trimmed_target);
+        if (!resolved_target.empty()) {
+            PGresultPtr target_role = QueryParams(
+                "SELECT COALESCE(role, 'user') FROM profiles WHERE pub_key_hash = $1 LIMIT 1",
+                {resolved_target}
+            );
+            const std::string normalized_target_role = PQntuples(target_role.get()) > 0
+                ? NormalizeRole(PQgetvalue(target_role.get(), 0, 0))
+                : "user";
+            if (normalized_target_role == "founder" || normalized_target_role == "moderator") {
+                return {{"error", "Moderator identities cannot be banned"}};
+            }
+        }
+    }
+
+    std::string salt = Config::Instance().Get().server_salt;
+    std::string hashed_target = sha256_hex(trimmed_target + salt);
+
+    std::string expires_at_str = "";
+    bool has_expiry = (duration_seconds > 0);
+    
+    PGresultPtr res;
+    if (has_expiry) {
+        res = QueryParams(
+            "INSERT INTO bans (target_identifier, ban_type, reason, expires_at, created_by, created_at) "
+            "VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::INTERVAL, $5, NOW()) "
+            "ON CONFLICT (target_identifier) DO UPDATE SET "
+            "reason = EXCLUDED.reason, expires_at = EXCLUDED.expires_at, created_by = EXCLUDED.created_by, created_at = NOW() "
+            "RETURNING id, expires_at",
+            {hashed_target, trimmed_type, trimmed_reason, std::to_string(duration_seconds), actor}
+        );
+    } else {
+        res = QueryParams(
+            "INSERT INTO bans (target_identifier, ban_type, reason, expires_at, created_by, created_at) "
+            "VALUES ($1, $2, $3, NULL, $4, NOW()) "
+            "ON CONFLICT (target_identifier) DO UPDATE SET "
+            "reason = EXCLUDED.reason, expires_at = NULL, created_by = EXCLUDED.created_by, created_at = NOW() "
+            "RETURNING id, expires_at",
+            {hashed_target, trimmed_type, trimmed_reason, actor}
+        );
+    }
+
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Failed to insert/update ban"}};
+    }
+
+    std::string ban_id = PQgetvalue(res.get(), 0, 0);
+    std::string expires_at_val = PQgetisnull(res.get(), 0, 1) ? "never" : PQgetvalue(res.get(), 0, 1);
+
+    if (trimmed_type == "identity") {
+        const std::string resolved_target = ResolveExistingProfileHash(trimmed_target);
+        if (!resolved_target.empty()) {
+            CreateNotification(resolved_target, actor, "moderation_ban", "Account restricted",
+                               trimmed_reason.empty() ? "Your identity has been restricted by moderation." : trimmed_reason,
+                               "/u/" + resolved_target);
+            CreateModerationEvent(actor, "ban_user",
+                                  "Banned identity " + ResolveProfileUsername(resolved_target) + " (Exp: " + expires_at_val + ").",
+                                  resolved_target);
+        }
+    } else {
+        CreateModerationEvent(actor, "ban_ip",
+                              "Banned IP address " + hashed_target.substr(0, 8) + "... (Exp: " + expires_at_val + ").",
+                              "");
+    }
+
+    return {{"status", "banned"}, {"id", ban_id}, {"target_identifier", hashed_target}, {"expires_at", expires_at_val}};
+}
+
+json DBManager::UnbanUser(const std::string& actor_hash, const std::string& founder_session_cookie,
+                          const std::string& ban_id) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
+        return {{"error", "Moderator authorization failed"}};
+    }
+
+    PGresultPtr res = QueryParams(
+        "DELETE FROM bans WHERE id = $1 RETURNING target_identifier, ban_type",
+        {ban_id}
+    );
+
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Ban record not found"}};
+    }
+
+    std::string target_identifier = PQgetvalue(res.get(), 0, 0);
+    std::string ban_type = PQgetvalue(res.get(), 0, 1);
+
+    CreateModerationEvent(actor, "unban_user",
+                          "Unbanned target " + target_identifier.substr(0, 8) + "... (Type: " + ban_type + ").",
+                          "");
+
+    return {{"status", "unbanned"}, {"id", ban_id}};
+}
+
+json DBManager::GetBans(const std::string& actor_hash, const std::string& founder_session_cookie) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
+        return {{"error", "Moderator authorization failed"}};
+    }
+
+    PGresultPtr res = Query(
+        "SELECT id, target_identifier, ban_type, reason, expires_at, created_by, created_at "
+        "FROM bans ORDER BY created_at DESC"
+    );
+
+    json list = json::array();
+    int rows = PQntuples(res.get());
+    for (int i = 0; i < rows; ++i) {
+        json item;
+        item["id"] = PQgetvalue(res.get(), i, 0);
+        item["target_identifier"] = PQgetvalue(res.get(), i, 1);
+        item["ban_type"] = PQgetvalue(res.get(), i, 2);
+        item["reason"] = PQgetvalue(res.get(), i, 3);
+        item["expires_at"] = PQgetisnull(res.get(), i, 4) ? json() : PQgetvalue(res.get(), i, 4);
+        item["created_by"] = PQgetvalue(res.get(), i, 5);
+        item["created_at"] = PQgetvalue(res.get(), i, 6);
+        list.push_back(item);
+    }
+
+    return list;
+}
+
+json DBManager::ExtendBan(const std::string& actor_hash, const std::string& founder_session_cookie,
+                          const std::string& ban_id, int64_t duration_seconds) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
+        return {{"error", "Moderator authorization failed"}};
+    }
+
+    if (duration_seconds <= 0) {
+        return {{"error", "Extension duration must be positive"}};
+    }
+
+    PGresultPtr res = QueryParams(
+        "UPDATE bans "
+        "SET expires_at = COALESCE(expires_at, NOW()) + ($2 || ' seconds')::INTERVAL "
+        "WHERE id = $1 RETURNING target_identifier, expires_at",
+        {ban_id, std::to_string(duration_seconds)}
+    );
+
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Ban record not found"}};
+    }
+
+    std::string target_identifier = PQgetvalue(res.get(), 0, 0);
+    std::string expires_at = PQgetvalue(res.get(), 0, 1);
+
+    CreateModerationEvent(actor, "extend_ban",
+                          "Extended ban for " + target_identifier.substr(0, 8) + "... (New Exp: " + expires_at + ").",
+                          "");
+
+    return {{"status", "extended"}, {"id", ban_id}, {"expires_at", expires_at}};
+}
+
+json DBManager::DeletePostAsModerator(const std::string& actor_hash, const std::string& founder_session_cookie, int64_t post_id) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
         return {{"error", "Moderator authorization failed"}};
     }
     if (post_id <= 0) {
@@ -2660,14 +3144,15 @@ bool DBManager::IsBlockedEitherDirection(const std::string& left_hash, const std
     return true;
 }
 
-bool DBManager::IsModeratorAuthorized(const std::string& actor_hash, const std::string& founder_session_hash, bool founder_only) {
+bool DBManager::IsModeratorAuthorized(const std::string& actor_hash, const std::string& founder_session_cookie, bool founder_only) {
     const std::string actor = ResolveProfileHash(actor_hash);
     if (actor.empty()) {
         return false;
     }
 
     PGresultPtr actor_res = QueryParams(
-        "SELECT COALESCE(role, 'user'), COALESCE(founder_session_hash, '') "
+        "SELECT COALESCE(role, 'user'), COALESCE(active_session_hash, ''), "
+        "       COALESCE(session_expires_at > NOW(), FALSE) "
         "FROM profiles WHERE pub_key_hash = $1 LIMIT 1",
         {actor}
     );
@@ -2676,9 +3161,15 @@ bool DBManager::IsModeratorAuthorized(const std::string& actor_hash, const std::
     }
 
     const std::string actor_role = NormalizeRole(PQgetvalue(actor_res.get(), 0, 0));
-    const std::string stored_founder_session_hash = PQgetvalue(actor_res.get(), 0, 1);
+    const std::string stored_active_session_hash = PQgetvalue(actor_res.get(), 0, 1);
+    const bool not_expired = std::string(PQgetvalue(actor_res.get(), 0, 2)) == "t";
+
     if (actor_role == "founder") {
-        return !founder_session_hash.empty() && stored_founder_session_hash == founder_session_hash;
+        if (founder_session_cookie.empty()) {
+            return false;
+        }
+        std::string hashed_cookie = sha256_hex(founder_session_cookie);
+        return not_expired && !stored_active_session_hash.empty() && stored_active_session_hash == hashed_cookie;
     }
     if (founder_only) {
         return false;
@@ -2686,26 +3177,20 @@ bool DBManager::IsModeratorAuthorized(const std::string& actor_hash, const std::
     return actor_role == "moderator";
 }
 
-void DBManager::CreateNotification(const std::string& user_hash, const std::string& actor_hash,
-                                   const std::string& type, const std::string& title,
-                                   const std::string& body, const std::string& link) {
-    if (user_hash.empty() || user_hash == "admin") {
-        return;
-    }
-
-    QueryParams(
-        "INSERT INTO notifications (user_hash, actor_hash, type, title, body, link) "
-        "VALUES ($1, $2, $3, $4, $5, $6)",
-        {user_hash, actor_hash, type, title, body, link}
-    );
-}
 
 // =============================================================================
 // Board Seeding
 // =============================================================================
 
 void DBManager::SeedBoards() {
-    PGresultPtr res = Query("SELECT COUNT(*) FROM boards");
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) {
+        Logger::Error("Failed to seed boards: no database connection available");
+        return;
+    }
+
+    PGresultPtr res = Query("SELECT COUNT(*) FROM boards", conn);
     int count = std::stoi(PQgetvalue(res.get(), 0, 0));
     if (count > 0) return;
 
@@ -2728,7 +3213,7 @@ void DBManager::SeedBoards() {
 
     for (const auto& b : boards) {
         const char* pv[5] = { b.id, b.name, b.desc, b.icon, b.nsfw };
-        PGresultPtr ins(PQexecParams(conn_,
+        PGresultPtr ins(PQexecParams(conn,
             "INSERT INTO boards (id, name, description, icon, nsfw) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
             5, nullptr, pv, nullptr, nullptr, 0));
     }
@@ -2858,9 +3343,13 @@ bool DBManager::IsProfileBanned(const std::string& profile_hash, std::string* re
         return false;
     }
 
+    std::string salt = Config::Instance().Get().server_salt;
+    std::string hashed_target = sha256_hex(profile_hash + salt);
+
     PGresultPtr res = QueryParams(
-        "SELECT COALESCE(reason, '') FROM bans WHERE target_hash = $1 LIMIT 1",
-        {profile_hash}
+        "SELECT COALESCE(reason, '') FROM bans "
+        "WHERE target_identifier = $1 AND ban_type = 'identity' AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        {hashed_target}
     );
     if (PQntuples(res.get()) == 0) {
         return false;
@@ -2871,6 +3360,434 @@ bool DBManager::IsProfileBanned(const std::string& profile_hash, std::string* re
         *reason = stored_reason.empty() ? "This identity is banned from moderation-protected actions" : stored_reason;
     }
     return true;
+}
+
+bool DBManager::IsIpBanned(const std::string& ip_address, std::string* reason) {
+    if (reason) {
+        *reason = "";
+    }
+    if (ip_address.empty()) {
+        return false;
+    }
+
+    std::string salt = Config::Instance().Get().server_salt;
+    std::string hashed_target = sha256_hex(ip_address + salt);
+
+    PGresultPtr res = QueryParams(
+        "SELECT COALESCE(reason, '') FROM bans "
+        "WHERE target_identifier = $1 AND ban_type = 'ip' AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
+        {hashed_target}
+    );
+    if (PQntuples(res.get()) == 0) {
+        return false;
+    }
+
+    if (reason) {
+        const std::string stored_reason = TrimCopy(PQgetvalue(res.get(), 0, 0));
+        *reason = stored_reason.empty() ? "Your IP address is banned" : stored_reason;
+    }
+    return true;
+}
+
+void DBManager::CreateNotification(const std::string& user_hash, const std::string& actor_hash,
+                                   const std::string& type, const std::string& title,
+                                   const std::string& body, const std::string& link) {
+    if (user_hash.empty() || user_hash == "admin") {
+        return;
+    }
+
+    QueryParams(
+        "INSERT INTO notification_queue (user_hash, actor_hash, type, title, body, link) "
+        "VALUES ($1, $2, $3, $4, $5, $6)",
+        {user_hash, actor_hash, type, title, body, link}
+    );
+}
+
+void DBManager::StartNotificationWorker() {
+    std::thread([this]() {
+        Logger::Info("Notification queue worker thread started.");
+        while (true) {
+            try {
+                PGresultPtr res;
+                {
+                    std::lock_guard<decltype(mutex_)> lock(mutex_);
+                    res = Query(
+                        "SELECT id, user_hash, actor_hash, type, title, body, link, retry_count "
+                        "FROM notification_queue "
+                        "WHERE status = 'pending' AND next_retry_at <= NOW() "
+                        "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                    );
+                }
+
+                if (PQntuples(res.get()) > 0) {
+                    std::string q_id = PQgetvalue(res.get(), 0, 0);
+                    std::string user_hash = PQgetvalue(res.get(), 0, 1);
+                    std::string actor_hash = PQgetvalue(res.get(), 0, 2);
+                    std::string type = PQgetvalue(res.get(), 0, 3);
+                    std::string title = PQgetvalue(res.get(), 0, 4);
+                    std::string body = PQgetvalue(res.get(), 0, 5);
+                    std::string link = PQgetvalue(res.get(), 0, 6);
+                    int retry_count = std::stoi(PQgetvalue(res.get(), 0, 7));
+
+                    bool success = false;
+                    try {
+                        std::lock_guard<decltype(mutex_)> lock(mutex_);
+                        QueryParams(
+                            "INSERT INTO notifications (user_hash, actor_hash, type, title, body, link) "
+                            "VALUES ($1, $2, $3, $4, $5, $6)",
+                            {user_hash, actor_hash, type, title, body, link}
+                        );
+                        QueryParams(
+                            "UPDATE notification_queue SET status = 'completed' WHERE id = $1",
+                            {q_id}
+                        );
+                        success = true;
+                    } catch (const std::exception& e) {
+                        Logger::Error("Notification delivery insert failed: " + std::string(e.what()));
+                    }
+
+                    if (!success) {
+                        int next_retry = retry_count + 1;
+                        int backoff = 1 << next_retry;
+                        std::lock_guard<decltype(mutex_)> lock(mutex_);
+                        QueryParams(
+                            "UPDATE notification_queue "
+                            "SET retry_count = $2, next_retry_at = NOW() + ($3 || ' seconds')::INTERVAL, "
+                            "    status = CASE WHEN $2 >= 5 THEN 'failed' ELSE 'pending' END "
+                            "WHERE id = $1",
+                            {q_id, std::to_string(next_retry), std::to_string(backoff)}
+                        );
+                    }
+                }
+            } catch (const std::exception& e) {
+                Logger::Error("Notification queue worker exception: " + std::string(e.what()));
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+    }).detach();
+}
+
+json DBManager::UpdateProfileSubscription(const std::string& user_hash, const std::string& tier, int duration_days) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string resolved = ResolveProfileHash(user_hash);
+    if (resolved.empty()) {
+        return {{"error", "Profile not found"}};
+    }
+
+    QueryParams(
+        "UPDATE profiles SET subscription_tier = $2, subscription_expires_at = NOW() + ($3 || ' days')::INTERVAL "
+        "WHERE pub_key_hash = $1",
+        {resolved, tier, std::to_string(duration_days)}
+    );
+
+    std::string key = "";
+    if (tier == "hermes" || tier == "circle") {
+        key = "qc_" + GenerateRandomHex(24);
+        QueryParams(
+            "INSERT INTO api_keys (user_hash, api_key, tier) VALUES ($1, $2, $3) "
+            "ON CONFLICT (user_hash) DO UPDATE SET api_key = EXCLUDED.api_key, tier = EXCLUDED.tier",
+            {resolved, key, tier}
+        );
+    }
+
+    return {{"status", "success"}, {"subscription_tier", tier}, {"api_key", key}};
+}
+
+bool DBManager::ValidateApiKey(const std::string& api_key, std::string& user_hash, std::string& tier) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    if (api_key.empty()) return false;
+
+    PGresultPtr res = QueryParams(
+        "SELECT user_hash, tier FROM api_keys WHERE api_key = $1 LIMIT 1",
+        {api_key}
+    );
+    if (PQntuples(res.get()) == 0) return false;
+
+    user_hash = PQgetvalue(res.get(), 0, 0);
+    tier = PQgetvalue(res.get(), 0, 1);
+
+    PGresultPtr sub_res = QueryParams(
+        "SELECT (subscription_expires_at IS NULL OR subscription_expires_at > NOW()) FROM profiles "
+        "WHERE pub_key_hash = $1 LIMIT 1",
+        {user_hash}
+    );
+    if (PQntuples(sub_res.get()) > 0) {
+        return std::string(PQgetvalue(sub_res.get(), 0, 0)) == "t";
+    }
+    return false;
+}
+
+bool DBManager::AddProfileTag(const std::string& user_hash, const std::string& tag_name) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string resolved = ResolveProfileHash(user_hash);
+    if (resolved.empty()) return false;
+
+    PGresultPtr res = QueryParams("SELECT COALESCE(unlocked_tags, '') FROM profiles WHERE pub_key_hash = $1", {resolved});
+    if (PQntuples(res.get()) == 0) return false;
+
+    std::string current_tags = PQgetvalue(res.get(), 0, 0);
+    std::string new_tags = current_tags;
+    
+    bool exists = false;
+    std::string comma_tag = "," + tag_name + ",";
+    std::string padded_tags = "," + current_tags + ",";
+    if (padded_tags.find(comma_tag) != std::string::npos || current_tags == tag_name) {
+        exists = true;
+    }
+
+    if (!exists) {
+        if (!new_tags.empty()) {
+            new_tags += ",";
+        }
+        new_tags += tag_name;
+    }
+
+    QueryParams(
+        "UPDATE profiles SET unlocked_tags = $2, custom_badge = $3 WHERE pub_key_hash = $1",
+        {resolved, new_tags, tag_name}
+    );
+    return true;
+}
+
+bool DBManager::SetProfileActiveTag(const std::string& user_hash, const std::string& tag_name) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string resolved = ResolveProfileHash(user_hash);
+    if (resolved.empty()) return false;
+
+    if (tag_name.empty()) {
+        QueryParams(
+            "UPDATE profiles SET custom_badge = '' WHERE pub_key_hash = $1",
+            {resolved}
+        );
+        return true;
+    }
+
+    PGresultPtr res = QueryParams("SELECT COALESCE(unlocked_tags, '') FROM profiles WHERE pub_key_hash = $1", {resolved});
+    if (PQntuples(res.get()) == 0) return false;
+
+    std::string current_tags = PQgetvalue(res.get(), 0, 0);
+    std::string comma_tag = "," + tag_name + ",";
+    std::string padded_tags = "," + current_tags + ",";
+    bool exists = (padded_tags.find(comma_tag) != std::string::npos || current_tags == tag_name);
+
+    if (!exists) {
+        return false;
+    }
+
+    QueryParams(
+        "UPDATE profiles SET custom_badge = $2 WHERE pub_key_hash = $1",
+        {resolved, tag_name}
+    );
+    return true;
+}
+
+std::string DBManager::GenerateRandomHex(int len) {
+    std::vector<unsigned char> buf(len / 2);
+    if (RAND_bytes(buf.data(), buf.size()) != 1) {
+        throw std::runtime_error("OpenSSL RAND_bytes failed");
+    }
+    std::stringstream ss;
+    for (unsigned char c : buf) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)c;
+    }
+    return ss.str();
+}
+
+json DBManager::CreateGroup(const std::string& name, const std::string& creator_hash, const std::string& encrypted_key) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string creator = ResolveProfileHash(creator_hash);
+    if (creator.empty()) {
+        return {{"error", "Creator profile not found"}};
+    }
+
+    PGresultPtr tier_res = QueryParams(
+        "SELECT subscription_tier, (subscription_expires_at IS NULL OR subscription_expires_at > NOW()) "
+        "FROM profiles WHERE pub_key_hash = $1 LIMIT 1",
+        {creator}
+    );
+    bool is_subscribed = false;
+    if (PQntuples(tier_res.get()) > 0) {
+        std::string tier = PQgetvalue(tier_res.get(), 0, 0);
+        std::string active = PQgetvalue(tier_res.get(), 0, 1);
+        if ((tier == "circle" || tier == "hermes") && active == "t") {
+            is_subscribed = true;
+        }
+    }
+
+    if (!is_subscribed) {
+        return {{"error", "Active Circle or Hermes subscription tier required to create group rooms"}};
+    }
+
+    PGresultPtr res = QueryParams(
+        "INSERT INTO groups (name, created_by) VALUES ($1, $2) RETURNING id",
+        {name, creator}
+    );
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Failed to create group"}};
+    }
+    std::string group_id = PQgetvalue(res.get(), 0, 0);
+
+    QueryParams(
+        "INSERT INTO group_members (group_id, user_hash, encrypted_group_key, role) "
+        "VALUES ($1, $2, $3, 'admin')",
+        {group_id, creator, encrypted_key}
+    );
+
+    return {{"status", "success"}, {"group_id", group_id}};
+}
+
+json DBManager::JoinGroup(const std::string& group_id, const std::string& user_hash, const std::string& encrypted_key) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string user = ResolveProfileHash(user_hash);
+    if (user.empty()) {
+        return {{"error", "User profile not found"}};
+    }
+
+    PGresultPtr gp_res = QueryParams("SELECT id FROM groups WHERE id = $1", {group_id});
+    if (PQntuples(gp_res.get()) == 0) {
+        return {{"error", "Group not found"}};
+    }
+
+    QueryParams(
+        "INSERT INTO group_members (group_id, user_hash, encrypted_group_key, role) "
+        "VALUES ($1, $2, $3, 'member') ON CONFLICT (group_id, user_hash) DO UPDATE "
+        "SET encrypted_group_key = EXCLUDED.encrypted_group_key",
+        {group_id, user, encrypted_key}
+    );
+
+    return {{"status", "success"}};
+}
+
+json DBManager::GetGroupMessages(const std::string& group_id, const std::string& actor_hash) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty()) {
+        return {{"error", "Authorization failed"}};
+    }
+
+    PGresultPtr mem_res = QueryParams(
+        "SELECT role FROM group_members WHERE group_id = $1 AND user_hash = $2",
+        {group_id, actor}
+    );
+    if (PQntuples(mem_res.get()) == 0) {
+        return {{"error", "Access denied: not a group member"}};
+    }
+
+    PGresultPtr msg_res = QueryParams(
+        "SELECT m.id, m.sender_hash, m.encrypted_content, "
+        "       COALESCE((EXTRACT(EPOCH FROM m.created_at) * 1000)::BIGINT::TEXT, '') "
+        "FROM group_messages m WHERE m.group_id = $1 ORDER BY m.created_at ASC",
+        {group_id}
+    );
+
+    json msgs = json::array();
+    for (int i = 0; i < PQntuples(msg_res.get()); ++i) {
+        json msg;
+        msg["id"] = PQgetvalue(msg_res.get(), i, 0);
+        msg["sender_hash"] = PQgetvalue(msg_res.get(), i, 1);
+        msg["encrypted_content"] = PQgetvalue(msg_res.get(), i, 2);
+        msg["created_at"] = PQgetvalue(msg_res.get(), i, 3);
+        msgs.push_back(msg);
+    }
+
+    return {{"messages", msgs}};
+}
+
+json DBManager::SendGroupMessage(const std::string& group_id, const std::string& sender_hash, const std::string& encrypted_content) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string sender = ResolveProfileHash(sender_hash);
+    if (sender.empty()) {
+        return {{"error", "Sender profile not found"}};
+    }
+
+    PGresultPtr mem_res = QueryParams(
+        "SELECT role FROM group_members WHERE group_id = $1 AND user_hash = $2",
+        {group_id, sender}
+    );
+    if (PQntuples(mem_res.get()) == 0) {
+        return {{"error", "Access denied: not a group member"}};
+    }
+
+    PGresultPtr res = QueryParams(
+        "INSERT INTO group_messages (group_id, sender_hash, encrypted_content) VALUES ($1, $2, $3) RETURNING id",
+        {group_id, sender, encrypted_content}
+    );
+    if (PQntuples(res.get()) == 0) {
+        return {{"error", "Failed to send message"}};
+    }
+
+    return {{"status", "success"}, {"message_id", PQgetvalue(res.get(), 0, 0)}};
+}
+
+json DBManager::GetUserGroups(const std::string& actor_hash) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty()) {
+        return json::array();
+    }
+
+    PGresultPtr res = QueryParams(
+        "SELECT g.id, g.name, g.created_by, m.encrypted_group_key, m.role "
+        "FROM groups g JOIN group_members m ON g.id = m.group_id "
+        "WHERE m.user_hash = $1 ORDER BY g.created_at DESC",
+        {actor}
+    );
+
+    json list = json::array();
+    for (int i = 0; i < PQntuples(res.get()); ++i) {
+        json gp;
+        gp["group_id"] = PQgetvalue(res.get(), i, 0);
+        gp["name"] = PQgetvalue(res.get(), i, 1);
+        gp["created_by"] = PQgetvalue(res.get(), i, 2);
+        gp["encrypted_key"] = PQgetvalue(res.get(), i, 3);
+        gp["role"] = PQgetvalue(res.get(), i, 4);
+        list.push_back(gp);
+    }
+    return list;
+}
+
+json DBManager::RotateGroupKeys(const std::string& group_id, const std::string& actor_hash, const json& new_keys) {
+    ConnLease lease(*pool_);
+    PGconn* conn = lease.get();
+    if (!conn) return {{"error", "Database connection unavailable"}};
+
+    const std::string actor = ResolveProfileHash(actor_hash);
+    if (actor.empty()) {
+        return {{"error", "Authorization failed"}};
+    }
+
+    PGresultPtr admin_res = QueryParams(
+        "SELECT role FROM group_members WHERE group_id = $1 AND user_hash = $2",
+        {group_id, actor}, conn);
+    if (PQntuples(admin_res.get()) == 0 || std::string(PQgetvalue(admin_res.get(), 0, 0)) != "admin") {
+        return {{"error", "Access denied: only group admins can rotate keys"}};
+    }
+
+    if (!new_keys.is_array()) {
+        return {{"error", "new_keys must be an array"}};
+    }
+
+    Execute("BEGIN", conn);
+    try {
+        for (const auto& item : new_keys) {
+            std::string user_hash = item.value("user_hash", "");
+            std::string encrypted_key = item.value("encrypted_key", "");
+            if (user_hash.empty() || encrypted_key.empty()) continue;
+
+            QueryParams(
+                "UPDATE group_members SET encrypted_group_key = $3 "
+                "WHERE group_id = $1 AND user_hash = $2",
+                {group_id, user_hash, encrypted_key},
+                conn
+            );
+        }
+        Execute("COMMIT", conn);
+    } catch (const std::exception& e) {
+        Execute("ROLLBACK", conn);
+        return {{"error", std::string("Rotation failed: ") + e.what()}};
+    }
+
+    return {{"status", "success"}};
 }
 
 void DBManager::CreateModerationEvent(const std::string& actor_hash, const std::string& action,

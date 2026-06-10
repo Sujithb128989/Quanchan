@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { Link } from 'react-router-dom';
 import type { Thread } from '../types';
 import { MessageSquare, Image, Clock } from 'lucide-react';
@@ -47,7 +63,7 @@ export default function ThreadCard({ thread, boardId }: ThreadCardProps) {
                         <Link
                             to={`/${boardId}/thread/${thread.id}`}
                             className="font-bold text-base hover:underline"
-                            style={{ color: '#fff000', textDecoration: 'none' }}
+                            style={{ color: 'var(--gold)', textDecoration: 'none' }}
                         >
                             {thread.subject}
                         </Link>
@@ -62,7 +78,7 @@ export default function ThreadCard({ thread, boardId }: ThreadCardProps) {
                         )}
                     </div>
 
-                    <div className="flex items-center gap-3 mb-2 text-xs" style={{ color: 'rgba(224,224,224,0.5)', fontFamily: 'monospace' }}>
+                    <div className="flex items-center gap-3 mb-2 text-xs" style={{ color: 'var(--text-dim)', fontFamily: 'monospace' }}>
                         <span style={{ color: '#ffd700' }}>{opLabel}</span>
                         <span className="flex items-center gap-1">
                             <Clock size={10} />{formatRelTime(thread.lastBump)}
@@ -70,13 +86,13 @@ export default function ThreadCard({ thread, boardId }: ThreadCardProps) {
                         <span>No.{thread.op.no}</span>
                     </div>
 
-                    <p className="text-sm leading-relaxed mb-2" style={{ color: '#b0b0b0', wordBreak: 'break-word' }}>
+                    <p className="text-sm leading-relaxed mb-2" style={{ color: 'var(--text-muted)', wordBreak: 'break-word' }}>
                         {thread.op.isEncrypted
                             ? '[Encrypted post - open thread to decrypt with passphrase]'
                             : preview + (thread.op.content.length > 180 ? '...' : '')}
                     </p>
 
-                    <div className="flex items-center gap-4 text-xs" style={{ color: 'rgba(224,224,224,0.5)', fontFamily: 'monospace' }}>
+                    <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-dim)', fontFamily: 'monospace' }}>
                         <span className="flex items-center gap-1">
                             <MessageSquare size={11} style={{ color: '#ffd700' }} />
                             {thread.replyCount} replies

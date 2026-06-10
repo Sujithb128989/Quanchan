@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 /**
  * useIdentity - Client-Side Identity Vault
  *
@@ -70,15 +86,29 @@ export function useIdentity() {
   }, []);
 
   const syncFounderSession = useCallback((nextIdentity: Identity, fallbackFounderToken = '') => {
-    if (nextIdentity.walletVersion === 2) {
-      deriveFounderTokenFromSeedPhrase(nextIdentity.seedPhrase)
-        .then(setFounderToken)
-        .catch(err => console.error('Failed to derive founder token from seed phrase:', err));
-      return;
-    }
-    if (fallbackFounderToken) {
-      setFounderToken(fallbackFounderToken);
-    }
+    const runSync = async () => {
+      let founderToken = fallbackFounderToken;
+      if (nextIdentity.walletVersion === 2) {
+        founderToken = await deriveFounderTokenFromSeedPhrase(nextIdentity.seedPhrase);
+      }
+      if (founderToken) {
+        setFounderToken(founderToken);
+        // Background session sync to backend via /api/admin/login
+        try {
+          await fetch('/api/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              actor_hash: nextIdentity.displayHash,
+              founder_token: founderToken,
+            }),
+          });
+        } catch (err) {
+          console.error('Failed background admin login:', err);
+        }
+      }
+    };
+    runSync().catch(err => console.error('Failed to sync founder session:', err));
   }, []);
 
   const hydrateIdentity = useCallback(async (parsed: Partial<Identity>): Promise<Identity | null> => {

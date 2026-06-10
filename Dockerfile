@@ -58,9 +58,12 @@ RUN git clone --branch 0.10.1 --single-branch --depth 1 \
     && ldconfig \
     && rm -rf /tmp/liboqs
 
-RUN git clone --recurse-submodules -b v1.62.1 --depth 1 \
-        https://github.com/grpc/grpc /tmp/grpc \
-    && cd /tmp/grpc && mkdir build && cd build \
+RUN git config --global http.postBuffer 1048576000 \
+    && git config --global http.version HTTP/1.1 \
+    && git clone -b v1.62.1 --depth 1 https://github.com/grpc/grpc /tmp/grpc \
+    && cd /tmp/grpc \
+    && git submodule update --init --recursive --depth 1 \
+    && mkdir build && cd build \
     && cmake .. \
          -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -74,7 +77,7 @@ RUN git clone --recurse-submodules -b v1.62.1 --depth 1 \
          -DgRPC_CARES_PROVIDER=package \
          -DgRPC_ZLIB_PROVIDER=package \
          -DgRPC_PROTOBUF_PROVIDER=module \
-    && make -j$(nproc) \
+    && make -j2 \
     && make install \
     && ldconfig \
     && rm -rf /tmp/grpc
@@ -90,7 +93,7 @@ RUN cmake . \
       -DCMAKE_PREFIX_PATH="/usr/local;/opt/openssl" \
       -DOPENSSL_ROOT_DIR=/opt/openssl \
       -DCMAKE_BUILD_TYPE=Release \
-    && make -j$(nproc) VERBOSE=1
+    && make -j2 VERBOSE=1
 
 FROM debian:bookworm-slim
 

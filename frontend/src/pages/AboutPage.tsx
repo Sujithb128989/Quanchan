@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2026 QuanChan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 import { Link } from 'react-router-dom';
 import { Shield, Lock, Eye, Cpu, Github, Linkedin, Mail, UserRound } from 'lucide-react';
 
@@ -12,7 +28,7 @@ export default function AboutPage() {
     return (
         <div style={{ padding: '24px 16px', maxWidth: '820px', margin: '0 auto' }}>
             <div style={{ marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '16px' }}>
-                <h1 className="text-xl font-black font-mono" style={{ color: '#fff' }}>About QuanChan</h1>
+                <h1 className="text-xl font-black font-mono" style={{ color: 'var(--text)' }}>About QuanChan</h1>
                 <p className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>
                     Anonymous posting with honest cryptography and fewer gimmicks.
                 </p>
@@ -20,7 +36,7 @@ export default function AboutPage() {
 
             <div className="flat-card" style={{ marginBottom: '12px' }}>
                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                    <h2 className="text-sm font-bold font-mono" style={{ color: '#fff' }}>What QuanChan Is</h2>
+                    <h2 className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>What QuanChan Is</h2>
                 </div>
                 <div style={{ padding: '16px 20px', color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.8 }}>
                     <p>
@@ -36,7 +52,7 @@ export default function AboutPage() {
 
             <div className="flat-card" style={{ marginBottom: '12px' }}>
                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                    <h2 className="text-sm font-bold font-mono" style={{ color: '#fff' }}>Technology</h2>
+                    <h2 className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>Technology</h2>
                 </div>
                 <div style={{ padding: '16px 20px' }}>
                     {TECH_ROWS.map(row => (
@@ -55,7 +71,7 @@ export default function AboutPage() {
 
             <div className="flat-card" style={{ marginBottom: '12px' }}>
                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                    <h2 className="text-sm font-bold font-mono" style={{ color: '#fff' }}>Builder</h2>
+                    <h2 className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>Builder</h2>
                 </div>
                 <div style={{ padding: '18px 20px', display: 'grid', gap: '18px', gridTemplateColumns: 'minmax(0, 1fr)' }}>
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -75,7 +91,7 @@ export default function AboutPage() {
                             <UserRound size={30} style={{ color: 'var(--gold)' }} />
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
-                            <h3 style={{ color: '#fff', fontSize: '1.15rem', fontFamily: 'var(--font-heading)', marginBottom: '8px' }}>Sujith B</h3>
+                            <h3 style={{ color: 'var(--text)', fontSize: '1.15rem', fontFamily: 'var(--font-heading)', marginBottom: '8px' }}>Sujith B</h3>
                             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.75 }}>
                                 Founder and builder of QuanChan. The contact links are here so users can reach a real person
                                 instead of guessing whether a thread or bot message will be seen.
@@ -113,9 +129,55 @@ export default function AboutPage() {
                 </div>
             </div>
 
+            <div className="flat-card" style={{ marginBottom: '12px' }}>
+                <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+                    <h2 className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>Contact & Security</h2>
+                </div>
+                <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                        Use these channels if you need a direct response outside the platform:
+                    </p>
+                    
+                    <div style={{ display: 'grid', gap: '12px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                        <a href="mailto:tukimo810@gmail.com" className="flat-card transition-all hover:bg-white/[0.04]" style={{ padding: '12px', display: 'block', textDecoration: 'none', background: 'rgba(255,255,255,0.015)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                <Mail size={14} style={{ color: 'var(--gold)' }} /> Email
+                            </div>
+                            <div style={{ color: 'var(--gold)', fontSize: '0.8rem', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>tukimo810@gmail.com</div>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '6px', lineHeight: 1.4 }}>Best for direct support and security reports.</div>
+                        </a>
+                        
+                        <a href="https://github.com/sujithb128989" target="_blank" rel="noopener noreferrer" className="flat-card transition-all hover:bg-white/[0.04]" style={{ padding: '12px', display: 'block', textDecoration: 'none', background: 'rgba(255,255,255,0.015)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                <Github size={14} style={{ color: 'var(--cyan)' }} /> GitHub
+                            </div>
+                            <div style={{ color: 'var(--cyan)', fontSize: '0.8rem', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>github.com/sujithb128989</div>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '6px', lineHeight: 1.4 }}>Source code, issues, and technical context.</div>
+                        </a>
+                        
+                        <a href="https://www.linkedin.com/in/sujith006/" target="_blank" rel="noopener noreferrer" className="flat-card transition-all hover:bg-white/[0.04]" style={{ padding: '12px', display: 'block', textDecoration: 'none', background: 'rgba(255,255,255,0.015)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                <Linkedin size={14} style={{ color: 'var(--green)' }} /> LinkedIn
+                            </div>
+                            <div style={{ color: 'var(--green)', fontSize: '0.8rem', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>linkedin.com/in/sujith006</div>
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '6px', lineHeight: 1.4 }}>Professional profile and business contact.</div>
+                        </a>
+                    </div>
+
+                    <div className="flat-card" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.015)', borderLeft: '3px solid var(--red)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                            <Shield size={14} style={{ color: 'var(--red)' }} /> Security & Abuse
+                        </div>
+                        <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '6px', lineHeight: 1.5 }}>
+                            Use in-app reports for abuse, impersonation, or bad content. Email us directly if the site itself is broken or for urgent vulnerabilities.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             <div className="flat-card" style={{ marginBottom: '16px' }}>
                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                    <h2 className="text-sm font-bold font-mono" style={{ color: '#fff' }}>Stack</h2>
+                    <h2 className="text-sm font-bold font-mono" style={{ color: 'var(--text)' }}>Stack</h2>
                 </div>
                 <div style={{ padding: '16px 20px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     {['C++17', 'liboqs', 'PostgreSQL', 'React', 'TypeScript', 'Three.js', 'WASM', 'Docker', 'gRPC'].map(tag => (

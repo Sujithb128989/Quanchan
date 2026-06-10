@@ -5,7 +5,7 @@
 ### Post-Quantum Anonymous Communication Platform
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19423061.svg)](https://doi.org/10.5281/zenodo.19423061)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Website](https://img.shields.io/badge/🌐_Live-quanchan.online-00C7B7?style=flat&labelColor=1a1a2e)](https://quanchan.online)
 
 [![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
@@ -406,7 +406,7 @@ The live `/api/crypto/tls-proof` output shows the latest observed TLS handshake 
 
 ## License
 
-This project is licensed under the Apache License 2.0. See [LICENSE](./LICENSE).
+This project is licensed under the GNU Affero General Public License Version 3 (AGPLv3). See [LICENSE](./LICENSE).
 
 ---
 
