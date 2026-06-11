@@ -45,7 +45,6 @@ export default function ProfilePage() {
         unbanUserAsModerator,
         selectTag,
         createPayment,
-        simulatePaymentSuccess,
         giftUser,
     } = useStore();
     const identity = useIdentity();
@@ -67,13 +66,13 @@ export default function ProfilePage() {
 
     // Shop and Custom Badge states
     const [activeTab, setActiveTab] = useState<'activity' | 'shop' | 'connections'>('activity');
-    const [selectedProduct, setSelectedProduct] = useState<{ id: string; name: string; price: number; type: 'tag' | 'sub' } | null>(null);
+    const [selectedProduct, setSelectedProduct] = useState<{ id: string; name: string; price: number; type: 'tag' | 'sub'; customTagText?: string } | null>(null);
     const [payCurrency, setPayCurrency] = useState<'btc' | 'ltc' | 'xmr'>('btc');
     const [invoice, setInvoice] = useState<any>(null);
     const [paymentLoading, setPaymentLoading] = useState(false);
     const [paymentError, setPaymentError] = useState('');
     const [activeTagChangeLoading, setActiveTagChangeLoading] = useState(false);
-    const [simulationStatus, setSimulationStatus] = useState('');
+    const [customBadgeText, setCustomBadgeText] = useState('');
 
     // Founder Gifting states
     const [giftType, setGiftType] = useState<'tag' | 'subscription'>('tag');
@@ -86,31 +85,30 @@ export default function ProfilePage() {
     const [giftSuccess, setGiftSuccess] = useState<string>('');
 
     const customTags = [
-        { id: 'queen', name: 'queen', price: 5.0, desc: 'Royal violet-magenta style' },
-        { id: 'daddy', name: 'daddy', price: 5.0, desc: 'Sweet pink style' },
-        { id: 'OG', name: 'OG', price: 5.0, desc: 'Classic gold style' },
-        { id: 'LGBT', name: 'LGBT', price: 5.0, desc: 'Proud rainbow/emerald style' },
-        { id: 'VIP', name: 'VIP', price: 5.0, desc: 'Premium blue style' },
-        { id: 'CHAD', name: 'CHAD', price: 5.0, desc: 'Bold red style' },
-        { id: 'DONOR', name: 'DONOR', price: 5.0, desc: 'Generous teal style' },
-        { id: 'PREMIUM', name: 'PREMIUM', price: 5.0, desc: 'Sleek orange style' },
-        { id: 'WAIFU', name: 'WAIFU', price: 5.0, desc: 'Fuchsia style' },
-        { id: 'SIMP', name: 'SIMP', price: 5.0, desc: 'Loyal violet style' },
-        { id: 'ELITE', name: 'ELITE', price: 5.0, desc: 'Aggressive rose-red style' },
-        { id: 'BOOSTER', name: 'BOOSTER', price: 5.0, desc: 'Sky blue style' },
+        { id: 'queen', name: 'queen', price: 50.0, desc: 'Royal violet-magenta style' },
+        { id: 'daddy', name: 'daddy', price: 50.0, desc: 'Sweet pink style' },
+        { id: 'OG', name: 'OG', price: 50.0, desc: 'Classic gold style' },
+        { id: 'LGBT', name: 'LGBT', price: 50.0, desc: 'Proud rainbow/emerald style' },
+        { id: 'VIP', name: 'VIP', price: 50.0, desc: 'Premium blue style' },
+        { id: 'CHAD', name: 'CHAD', price: 50.0, desc: 'Bold red style' },
+        { id: 'DONOR', name: 'DONOR', price: 50.0, desc: 'Generous teal style' },
+        { id: 'PREMIUM', name: 'PREMIUM', price: 50.0, desc: 'Sleek orange style' },
+        { id: 'WAIFU', name: 'WAIFU', price: 50.0, desc: 'Fuchsia style' },
+        { id: 'SIMP', name: 'SIMP', price: 50.0, desc: 'Loyal violet style' },
+        { id: 'ELITE', name: 'ELITE', price: 50.0, desc: 'Aggressive rose-red style' },
+        { id: 'BOOSTER', name: 'BOOSTER', price: 50.0, desc: 'Sky blue style' },
     ];
 
     const subscriptions = [
-        { id: 'circle', name: 'Circle Tier', price: 10.0, desc: 'Unlock Group Rooms creation & more features' },
-        { id: 'hermes', name: 'Hermes Tier', price: 25.0, desc: 'Full AI API keys & ML-KEM encrypted assistant access' },
+        { id: 'circle', name: 'Circle Tier', price: 50.0, desc: 'Unlock Group Rooms creation & more features' },
+        { id: 'hermes', name: 'Hermes Tier', price: 50.0, desc: 'Full AI API keys & ML-KEM encrypted assistant access' },
     ];
 
-    const initiatePurchase = (id: string, name: string, price: number, type: 'tag' | 'sub') => {
-        setSelectedProduct({ id, name, price, type });
+    const initiatePurchase = (id: string, name: string, price: number, type: 'tag' | 'sub', customTagText?: string) => {
+        setSelectedProduct({ id, name, price, type, customTagText });
         setPayCurrency('btc');
         setInvoice(null);
         setPaymentError('');
-        setSimulationStatus('');
     };
 
     const handleCreateInvoice = async () => {
@@ -118,7 +116,7 @@ export default function ProfilePage() {
         try {
             setPaymentLoading(true);
             setPaymentError('');
-            const data = await createPayment(hash, selectedProduct.id, payCurrency);
+            const data = await createPayment(hash, selectedProduct.id, payCurrency, selectedProduct.customTagText);
             setInvoice(data);
         } catch (err) {
             console.error('Invoice creation failed:', err);
@@ -128,24 +126,7 @@ export default function ProfilePage() {
         }
     };
 
-    const handleSimulateSuccess = async () => {
-        if (!invoice || !hash) return;
-        try {
-            setSimulationStatus('Simulating payment success...');
-            const data = await simulatePaymentSuccess(invoice.order_id);
-            setSimulationStatus(data?.message || 'Success simulated!');
-            const refreshedProfile = await getProfile(hash);
-            setProfile(refreshedProfile);
-            window.setTimeout(() => {
-                setInvoice(null);
-                setSelectedProduct(null);
-                setSimulationStatus('');
-            }, 2000);
-        } catch (err) {
-            console.error('Simulation failed:', err);
-            setSimulationStatus(err instanceof Error ? err.message : 'Simulation failed.');
-        }
-    };
+
 
     const handleEquipTag = async (tag: string) => {
         try {
@@ -1210,7 +1191,7 @@ export default function ProfilePage() {
                             <h2 className="text-lg font-bold" style={{ color: 'var(--text)' }}>Custom Badges & Display Tags</h2>
                         </div>
                         <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', marginBottom: '16px' }}>
-                            Stand out in the catalog and threads with a colorful display badge next to your name. All tags are a one-time purchase of $5.00 USD.
+                            Stand out in the catalog and threads with a colorful display badge next to your name. Predefined tags are a one-time purchase of $50.00 USD. You can also create your own custom tag, priced dynamically by character length!
                         </p>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
                             {customTags.map(tag => {
@@ -1248,7 +1229,7 @@ export default function ProfilePage() {
                                         </span>
                                         <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', textAlign: 'center' }}>{tag.desc}</p>
                                         <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto', paddingTop: '8px' }}>
-                                            <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text)' }}>$5.00</span>
+                                            <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text)' }}>$50.00</span>
                                             {isUnlocked ? (
                                                 <span className="text-xs font-semibold" style={{ color: 'var(--green)' }}>Unlocked</span>
                                             ) : (
@@ -1264,6 +1245,65 @@ export default function ProfilePage() {
                                     </div>
                                 );
                             })}
+
+                            {/* Dynamic Custom Tag Generator */}
+                            <div
+                                style={{
+                                    padding: '16px',
+                                    borderRadius: '10px',
+                                    background: 'var(--surface-2)',
+                                    border: '1px dashed var(--cyan)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    gap: '12px',
+                                }}
+                            >
+                                <span className="identity-badge px-2.5 py-1 text-xs font-bold border rounded text-zinc-400 border-zinc-500 bg-zinc-950/30">
+                                    {customBadgeText || 'YOUR_TAG'}
+                                </span>
+                                <p style={{ color: 'var(--text-dim)', fontSize: '0.72rem', textAlign: 'center' }}>
+                                    Choose custom tag text (alphanumeric, max 6 chars). Price drops with length!
+                                </p>
+                                <input
+                                    type="text"
+                                    value={customBadgeText}
+                                    onChange={(e) => {
+                                        const val = e.target.value.replace(/[^a-zA-Z0-9_\s-]/g, '').slice(0, 6);
+                                        setCustomBadgeText(val);
+                                    }}
+                                    placeholder="e.g. CHAD"
+                                    className="font-mono text-center text-xs"
+                                    style={{
+                                        width: '100%',
+                                        padding: '8px',
+                                        background: 'var(--surface-3)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: '6px',
+                                        color: 'var(--text)',
+                                    }}
+                                />
+                                <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto', paddingTop: '8px' }}>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--cyan)' }}>
+                                        ${(customBadgeText.length <= 1 ? 50.0 : customBadgeText.length === 2 ? 40.0 : customBadgeText.length === 3 ? 30.0 : customBadgeText.length === 4 ? 20.0 : customBadgeText.length === 5 ? 10.0 : 2.0).toFixed(2)} USD
+                                    </span>
+                                    <button
+                                        onClick={() => {
+                                            if (!customBadgeText) return;
+                                            const price = customBadgeText.length <= 1 ? 50.0 : customBadgeText.length === 2 ? 40.0 : customBadgeText.length === 3 ? 30.0 : customBadgeText.length === 4 ? 20.0 : customBadgeText.length === 5 ? 10.0 : 2.0;
+                                            initiatePurchase('custom_tag', `Custom Tag: "${customBadgeText}"`, price, 'tag', customBadgeText);
+                                        }}
+                                        className="btn-v2-accent text-xs"
+                                        style={{ padding: '6px 12px' }}
+                                        disabled={!customBadgeText}
+                                    >
+                                        Buy Custom Tag
+                                    </button>
+                                </div>
+                                <p style={{ fontSize: '0.62rem', color: 'var(--red)', textAlign: 'center', marginTop: '2px', lineHeight: '1.2' }}>
+                                    ⚠️ Warning: Longer tags have a risk of UI overlap or display truncation on smaller devices. Customize at your own risk!
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -1394,31 +1434,7 @@ export default function ProfilePage() {
                                             </p>
                                         </div>
 
-                                        <div
-                                            style={{
-                                                padding: '12px',
-                                                background: 'rgba(234, 179, 8, 0.05)',
-                                                border: '1px solid rgba(234, 179, 8, 0.2)',
-                                                borderRadius: '8px',
-                                                marginBottom: '20px',
-                                            }}
-                                        >
-                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '8px' }}>
-                                                <strong>Sandbox Testing:</strong> Click below to simulate a successful cryptocurrency confirmation immediately:
-                                            </p>
-                                            <button
-                                                onClick={handleSimulateSuccess}
-                                                className="btn-v2-accent w-full"
-                                                style={{ padding: '8px 12px', fontSize: '0.85rem' }}
-                                            >
-                                                Simulate Payment Success
-                                            </button>
-                                            {simulationStatus && (
-                                                <p style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--green)', fontWeight: 'bold' }}>
-                                                    {simulationStatus}
-                                                </p>
-                                            )}
-                                        </div>
+
 
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button

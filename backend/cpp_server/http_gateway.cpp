@@ -53,11 +53,21 @@ static OQS_SIG* GetThreadLocalSig();
 // =============================================================================
 
 static std::string random_hex(int len) {
-    static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int> dist(0, 15);
+    // Use OpenSSL CSPRNG instead of std::mt19937 for security-critical tokens
+    int byte_count = (len + 1) / 2;
+    std::vector<unsigned char> buf(byte_count);
+    if (RAND_bytes(buf.data(), byte_count) != 1) {
+        // Fallback should never happen in practice with a healthy OpenSSL
+        Logger::Error("RAND_bytes failed in random_hex — OpenSSL CSPRNG unavailable");
+        return "";
+    }
     std::stringstream ss;
-    for (int i = 0; i < len; ++i) ss << std::hex << dist(rng);
-    return ss.str();
+    for (int i = 0; i < byte_count; ++i) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)buf[i];
+    }
+    std::string result = ss.str();
+    if ((int)result.size() > len) result.resize(len);
+    return result;
 }
 
 static std::string hex_decode(const std::string& hex) {
@@ -445,7 +455,7 @@ static std::vector<uint8_t> base64_decode(const std::string& input) {
     std::vector<uint8_t> out(estimate + 128);
 
     int decoded = EVP_DecodeBlock(out.data(), reinterpret_cast<const unsigned char*>(cleaned.data()), static_cast<int>(input_len));
-    if (decoded < 0) {
+    if (decoded < 0 || static_cast<size_t>(decoded) < padding) {
         return {};
     }
 
@@ -931,12 +941,26 @@ void RunHTTPServer(DBManager& db_manager, int port,
     SSL_CTX_set_info_callback(ssl_ctx, tls_info_callback);
 
     // â”€â”€â”€ CORS & Auth Middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Allowed CORS origins — only the production domain and common dev origins
+    static const std::vector<std::string> allowed_origins = {
+        "https://quanchan.online",
+        "https://www.quanchan.online",
+        "http://localhost:5173",
+        "http://localhost:3000"
+    };
+
     svr.set_pre_routing_handler([&cert_info, &tls_state](const httplib::Request& req, httplib::Response& res) {
         if (req.has_header("Origin")) {
-            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-            res.set_header("Access-Control-Allow-Credentials", "true");
-        } else {
-            res.set_header("Access-Control-Allow-Origin", "*");
+            std::string origin = req.get_header_value("Origin");
+            bool origin_allowed = false;
+            for (const auto& ao : allowed_origins) {
+                if (origin == ao) { origin_allowed = true; break; }
+            }
+            if (origin_allowed) {
+                res.set_header("Access-Control-Allow-Origin", origin);
+                res.set_header("Access-Control-Allow-Credentials", "true");
+            }
+            // If origin not allowed, no CORS headers are set — browser blocks the request
         }
         res.set_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key, X-CSRF-Token");
@@ -966,8 +990,8 @@ void RunHTTPServer(DBManager& db_manager, int port,
         // Stateless CSRF Protection
         bool is_write_method = (req.method == "POST" || req.method == "PUT" ||
                                 req.method == "DELETE" || req.method == "PATCH");
-        bool is_nowpayments_webhook = (req.path.find("/nowpayments") != std::string::npos || req.path.find("/webhook/nowpayments") != std::string::npos);
-        bool is_hermes_endpoint = (req.path.find("/hermes") != std::string::npos || req.path.find("/api/hermes") != std::string::npos);
+        bool is_nowpayments_webhook = (req.path == "/api/payments/webhook");
+        bool is_hermes_endpoint = (req.path == "/api/hermes/v1/chat/completions");
         bool skip_csrf = is_nowpayments_webhook || is_hermes_endpoint;
 
         std::string cookie_header = req.has_header("Cookie") ? req.get_header_value("Cookie") : "";
@@ -1200,9 +1224,31 @@ void RunHTTPServer(DBManager& db_manager, int port,
         }
     });
 
-    // PATCH /api/threads/:id/archive
+    // PATCH /api/threads/:id/archive — requires admin session
     svr.Patch(R"(/api/threads/(\d+)/archive)", [&](const httplib::Request& req, httplib::Response& res) {
         try {
+            std::string actor_hash;
+            try {
+                auto j = json::parse(req.body);
+                actor_hash = trim_copy(j.value("actor_hash", ""));
+            } catch (...) {
+                actor_hash = req.has_param("actor_hash") ? trim_copy(req.get_param_value("actor_hash")) : "";
+            }
+            if (actor_hash.empty()) {
+                res.status = 400;
+                res.set_content("{\"error\":\"actor_hash required\"}", "application/json");
+                return;
+            }
+
+            std::string cookie_header = req.has_header("Cookie") ? req.get_header_value("Cookie") : "";
+            std::string founder_session_cookie = parse_cookie(cookie_header, "founder_session");
+
+            if (!db_manager.IsModeratorAuthorized(actor_hash, founder_session_cookie)) {
+                res.status = 403;
+                res.set_content("{\"error\":\"Authorization required to archive threads\"}", "application/json");
+                return;
+            }
+
             int64_t tid = std::stoll(req.matches[1]);
             db_manager.ArchiveThread(tid);
             res.set_content(json({{"id", tid}, {"archived", true}}).dump(), "application/json");
@@ -1744,7 +1790,7 @@ void RunHTTPServer(DBManager& db_manager, int port,
         }
     });
 
-    // POST /api/interact
+    // POST /api/interact — requires Dilithium5 signature to prevent vote spoofing
     svr.Post("/api/interact", [&](const httplib::Request& req, httplib::Response& res) {
         try {
             auto j = json::parse(req.body);
@@ -1752,6 +1798,15 @@ void RunHTTPServer(DBManager& db_manager, int port,
             std::string hash = j.value("pub_key_hash", "");
             int type = j.value("type", 0);
             if (post_id == 0 || hash.empty() || (type != 1 && type != -1)) { res.status = 400; return; }
+
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             res.set_content(db_manager.InteractPost(post_id, hash, type).dump(), "application/json");
         } catch (const std::exception& e) {
             res.status = 500; res.set_content(json({{"error", e.what()}}).dump(), "application/json");
@@ -2300,6 +2355,15 @@ void RunHTTPServer(DBManager& db_manager, int port,
                     return;
                 }
             }
+
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != reporter) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             json result = db_manager.CreateReport(reporter, target, reason, target_kind, target_post_id, target_thread_id, target_board_id, target_display_name, context_link);
             if (result.contains("error")) {
                 res.status = 400;
@@ -2313,6 +2377,8 @@ void RunHTTPServer(DBManager& db_manager, int port,
     // -------------------------------------------------------------------------
     // NOWPayments & Subscriptions (Task 6)
     // -------------------------------------------------------------------------
+    // NOWPayments & Subscriptions (Task 6 & Task 7 Customizations)
+    // -------------------------------------------------------------------------
 
     // POST /api/payments/create
     svr.Post("/api/payments/create", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2322,47 +2388,90 @@ void RunHTTPServer(DBManager& db_manager, int port,
             std::string tier = trim_copy(j.value("tier", ""));
             std::string pay_currency = trim_copy(j.value("pay_currency", ""));
 
+            // Verify actor identity via Dilithium5 signature to prevent invoice spoofing
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != actor_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
+            // Validate pay_currency is strictly btc, ltc, or xmr
+            std::string pc_lower = pay_currency;
+            std::transform(pc_lower.begin(), pc_lower.end(), pc_lower.begin(), ::tolower);
+            if (pc_lower != "btc" && pc_lower != "ltc" && pc_lower != "xmr") {
+                res.status = 400;
+                res.set_content("{\"error\":\"pay_currency must be btc, ltc, or xmr\"}", "application/json");
+                return;
+            }
+
             bool is_sub_tier = (tier == "circle" || tier == "hermes");
             bool is_valid_tag = (tier == "daddy" || tier == "OG" || tier == "LGBT" ||
                                  tier == "VIP" || tier == "CHAD" || tier == "DONOR" ||
                                  tier == "PREMIUM" || tier == "WAIFU" || tier == "SIMP" ||
-                                 tier == "ELITE" || tier == "BOOSTER");
+                                 tier == "ELITE" || tier == "BOOSTER" || tier == "queen");
+            bool is_sticky_tier = (tier == "sticky" || tier == "bump");
+            bool is_custom_tag = (tier == "custom_tag");
 
-            if (!is_sub_tier && !is_valid_tag) {
+            if (!is_sub_tier && !is_valid_tag && !is_sticky_tier && !is_custom_tag) {
                 res.status = 400;
-                res.set_content("{\"error\":\"tier must be circle, hermes, or a valid custom tag (daddy, OG, LGBT, VIP, CHAD, DONOR, PREMIUM, WAIFU, SIMP, ELITE, BOOSTER)\"}", "application/json");
+                res.set_content("{\"error\":\"tier must be circle, hermes, sticky, custom_tag, or a valid predefined tag\"}", "application/json");
                 return;
             }
 
-            double price = 5.0; // default for tags
-            if (tier == "circle") price = 10.0;
-            else if (tier == "hermes") price = 25.0;
-
-            std::string order_id = actor_hash;
-            if (is_valid_tag) {
-                order_id += "_tag_" + tier;
-            } else {
-                order_id += "_" + tier;
+            double price = 50.0; // default for predefined tags
+            if (tier == "circle") price = 50.0;
+            else if (tier == "hermes") price = 50.0;
+            else if (is_sticky_tier) price = 5.0;
+            else if (is_custom_tag) {
+                std::string custom_tag_text = trim_copy(j.value("custom_tag_text", ""));
+                if (custom_tag_text.empty() || custom_tag_text.length() > 6) {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"custom_tag_text must be between 1 and 6 characters\"}", "application/json");
+                    return;
+                }
+                for (char c : custom_tag_text) {
+                    if (!std::isalnum(c) && c != ' ' && c != '_' && c != '-') {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"custom_tag_text contains invalid characters\"}", "application/json");
+                        return;
+                    }
+                }
+                size_t len = custom_tag_text.length();
+                if (len == 1) price = 50.0;
+                else if (len == 2) price = 40.0;
+                else if (len == 3) price = 30.0;
+                else if (len == 4) price = 20.0;
+                else if (len == 5) price = 10.0;
+                else price = 2.0; // len == 6
             }
 
-            std::string order_description = is_valid_tag ? ("QuanChan Paid Tag - " + tier) : ("QuanChan Subscription - " + tier + " tier");
+            std::string order_id = actor_hash;
+            std::string order_description = "";
+
+            if (is_valid_tag) {
+                order_id += "_tag_" + tier;
+                order_description = "QuanChan Predefined Tag - " + tier;
+            } else if (is_custom_tag) {
+                std::string custom_tag_text = trim_copy(j.value("custom_tag_text", ""));
+                order_id += "_customtag_" + custom_tag_text;
+                order_description = "QuanChan Custom Tag - " + custom_tag_text;
+            } else if (is_sticky_tier) {
+                std::string thread_id = trim_copy(j.value("thread_id", ""));
+                order_id = "sticky_thread_" + thread_id;
+                order_description = "QuanChan Thread Bump - Thread No." + thread_id;
+            } else {
+                order_id += "_" + tier;
+                order_description = "QuanChan Subscription - " + tier + " tier";
+            }
 
             const char* api_key_env = std::getenv("QC_NOWPAYMENTS_API_KEY");
             std::string api_key = api_key_env ? api_key_env : "";
 
             if (api_key.empty() || api_key == "sandbox") {
-                json mock_res = {
-                    {"payment_id", "mock_np_" + random_hex(16)},
-                    {"payment_status", "waiting"},
-                    {"pay_address", "mock_addr_" + pay_currency + "_" + random_hex(20)},
-                    {"pay_amount", price / 100000.0},
-                    {"pay_currency", pay_currency},
-                    {"price_amount", price},
-                    {"price_currency", "usd"},
-                    {"order_id", order_id},
-                    {"order_description", order_description}
-                };
-                res.set_content(mock_res.dump(), "application/json");
+                res.status = 500;
+                res.set_content("{\"error\":\"NOWPayments API key is not configured on the server.\"}", "application/json");
                 return;
             }
 
@@ -2402,27 +2511,47 @@ void RunHTTPServer(DBManager& db_manager, int port,
             const char* secret_env = std::getenv("QC_NOWPAYMENTS_IPN_SECRET");
             std::string secret = secret_env ? secret_env : "";
 
-            if (!secret.empty()) {
-                std::string computed = hmac_sha512(secret, req.body);
-                if (computed != signature) {
-                    res.status = 403;
-                    res.set_content("{\"error\":\"Invalid IPN signature\"}", "application/json");
-                    return;
-                }
+            if (secret.empty()) {
+                res.status = 500;
+                res.set_content("{\"error\":\"Webhook IPN secret is not configured on the server.\"}", "application/json");
+                return;
+            }
+
+            std::string computed = hmac_sha512(secret, req.body);
+            if (computed != signature) {
+                res.status = 403;
+                res.set_content("{\"error\":\"Invalid IPN signature\"}", "application/json");
+                return;
             }
 
             auto body_json = json::parse(req.body);
             std::string status = body_json.value("payment_status", "");
             std::string order_id = body_json.value("order_id", "");
 
-            if (status == "finished" || status == "confirmed" || status == "waiting") {
+            if (status == "finished" || status == "confirmed") {
                 size_t tag_pos = order_id.find("_tag_");
+                size_t customtag_pos = order_id.find("_customtag_");
                 if (tag_pos != std::string::npos) {
                     std::string user_hash = order_id.substr(0, tag_pos);
                     std::string tag_name = order_id.substr(tag_pos + 5);
 
                     db_manager.AddProfileTag(user_hash, tag_name);
                     Logger::Info("Added paid tag via webhook. User: " + user_hash + ", Tag: " + tag_name);
+                } else if (customtag_pos != std::string::npos) {
+                    std::string user_hash = order_id.substr(0, customtag_pos);
+                    std::string tag_name = order_id.substr(customtag_pos + 11);
+
+                    db_manager.AddProfileTag(user_hash, tag_name);
+                    Logger::Info("Added paid custom tag via webhook. User: " + user_hash + ", Tag: " + tag_name);
+                } else if (order_id.rfind("sticky_thread_", 0) == 0) {
+                    std::string thread_id_str = order_id.substr(14);
+                    try {
+                        int64_t thread_id = std::stoll(thread_id_str);
+                        db_manager.StickyThread(thread_id);
+                        Logger::Info("Thread " + thread_id_str + " marked as sticky/bumped via webhook.");
+                    } catch (const std::exception& e) {
+                        Logger::Error("Failed to parse thread_id from order_id: " + order_id + " - " + e.what());
+                    }
                 } else {
                     size_t underscore = order_id.find('_');
                     if (underscore != std::string::npos) {
@@ -2442,45 +2571,7 @@ void RunHTTPServer(DBManager& db_manager, int port,
         }
     });
 
-    // POST /api/payments/simulate_success
-    svr.Post("/api/payments/simulate_success", [&](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto j = json::parse(req.body);
-            std::string order_id = j.value("order_id", "");
-            
-            if (order_id.empty()) {
-                res.status = 400;
-                res.set_content("{\"error\":\"order_id is required\"}", "application/json");
-                return;
-            }
 
-            size_t tag_pos = order_id.find("_tag_");
-            if (tag_pos != std::string::npos) {
-                std::string user_hash = order_id.substr(0, tag_pos);
-                std::string tag_name = order_id.substr(tag_pos + 5);
-
-                db_manager.AddProfileTag(user_hash, tag_name);
-                Logger::Info("Simulated paid tag success. User: " + user_hash + ", Tag: " + tag_name);
-                res.set_content("{\"status\":\"ok\",\"message\":\"Tag unlocked successfully!\"}", "application/json");
-            } else {
-                size_t underscore = order_id.find('_');
-                if (underscore != std::string::npos) {
-                    std::string user_hash = order_id.substr(0, underscore);
-                    std::string tier = order_id.substr(underscore + 1);
-
-                    db_manager.UpdateProfileSubscription(user_hash, tier, 30);
-                    Logger::Info("Simulated subscription success. User: " + user_hash + ", Tier: " + tier);
-                    res.set_content("{\"status\":\"ok\",\"message\":\"Subscription activated successfully!\"}", "application/json");
-                } else {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"invalid order_id format\"}", "application/json");
-                }
-            }
-        } catch (const std::exception& e) {
-            res.status = 500;
-            res.set_content(json({{"error", e.what()}}).dump(), "application/json");
-        }
-    });
 
     // POST /api/profile/select_tag
     svr.Post("/api/profile/select_tag", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2534,6 +2625,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 return;
             }
 
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != creator_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             json result = db_manager.CreateGroup(name, creator_hash, encrypted_key);
             if (result.contains("error")) {
                 res.status = 403;
@@ -2559,6 +2658,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 return;
             }
 
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != user_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             json result = db_manager.JoinGroup(group_id, user_hash, encrypted_key);
             if (result.contains("error")) {
                 res.status = 400;
@@ -2580,6 +2687,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 return;
             }
 
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, "", db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != actor_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             json result = db_manager.GetUserGroups(actor_hash);
             res.set_content(result.dump(), "application/json");
         } catch (const std::exception& e) {
@@ -2597,6 +2712,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 res.status = 400;
                 res.set_content("{\"error\":\"group_id and actor_hash required\"}", "application/json");
                 return;
+            }
+
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, "", db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != actor_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
             }
 
             json result = db_manager.GetGroupMessages(group_id, actor_hash);
@@ -2624,6 +2747,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 return;
             }
 
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != sender_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
+            }
+
             json result = db_manager.SendGroupMessage(group_id, sender_hash, encrypted_content);
             if (result.contains("error")) {
                 res.status = 403;
@@ -2647,6 +2778,14 @@ void RunHTTPServer(DBManager& db_manager, int port,
                 res.status = 400;
                 res.set_content("{\"error\":\"group_id, actor_hash, and new_keys required\"}", "application/json");
                 return;
+            }
+
+            std::string verified_identity_hash;
+            if (!VerifyRequestSignature(req, req.body, db_manager, verified_identity_hash)) {
+                res.status = 401; res.set_content("{\"error\":\"Signature verification failed\"}", "application/json"); return;
+            }
+            if (verified_identity_hash != actor_hash) {
+                res.status = 403; res.set_content("{\"error\":\"Identity hash mismatch\"}", "application/json"); return;
             }
 
             json result = db_manager.RotateGroupKeys(group_id, actor_hash, new_keys);
@@ -2830,7 +2969,8 @@ void RunHTTPServer(DBManager& db_manager, int port,
             std::string file_data = file.content;
             std::string ext = normalized_upload_extension(file.filename, file.content_type, file_data);
             if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".gif" &&
-                ext != ".webp" && ext != ".mp3" && ext != ".ogg" && ext != ".wav") {
+                ext != ".webp" && ext != ".mp4" && ext != ".webm" &&
+                ext != ".mp3" && ext != ".ogg" && ext != ".wav") {
                 res.status = 400;
                 res.set_content("{\"error\":\"Disallowed file extension\"}", "application/json");
                 return;

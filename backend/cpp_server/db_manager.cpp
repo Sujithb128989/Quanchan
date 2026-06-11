@@ -1258,6 +1258,12 @@ void DBManager::ArchiveThread(int64_t thread_id) {
     QueryParams("UPDATE threads SET archived = TRUE WHERE id = $1", {tid});
 }
 
+void DBManager::StickyThread(int64_t thread_id) {
+    std::lock_guard<decltype(mutex_)> lock(mutex_);
+    std::string tid = std::to_string(thread_id);
+    QueryParams("UPDATE threads SET sticky = TRUE WHERE id = $1", {tid});
+}
+
 // =============================================================================
 // Imageboard: Posts
 // =============================================================================
@@ -1647,7 +1653,7 @@ json DBManager::AdminLogin(const std::string& actor_hash, const std::string& fou
     return {{"status", "success"}};
 }
 
-json DBManager::SetProfileRole(const std::string& actor_hash, const std::string& founder_session_hash,
+json DBManager::SetProfileRole(const std::string& actor_hash, const std::string& founder_session_cookie,
                                const std::string& target_hash, const std::string& role) {
     std::lock_guard<decltype(mutex_)> lock(mutex_);
 
@@ -1665,18 +1671,7 @@ json DBManager::SetProfileRole(const std::string& actor_hash, const std::string&
         return {{"error", "Founder cannot change their own role here"}};
     }
 
-    PGresultPtr actor_res = QueryParams(
-        "SELECT COALESCE(role, 'user'), COALESCE(founder_session_hash, '') "
-        "FROM profiles WHERE pub_key_hash = $1",
-        {actor}
-    );
-    if (PQntuples(actor_res.get()) == 0) {
-        return {{"error", "Founder profile not found"}};
-    }
-
-    const std::string actor_role = NormalizeRole(PQgetvalue(actor_res.get(), 0, 0));
-    const std::string stored_founder_session_hash = PQgetvalue(actor_res.get(), 0, 1);
-    if (actor_role != "founder" || stored_founder_session_hash.empty() || stored_founder_session_hash != founder_session_hash) {
+    if (!IsModeratorAuthorized(actor, founder_session_cookie, true)) {
         return {{"error", "Founder authorization failed"}};
     }
 
@@ -2655,11 +2650,11 @@ json DBManager::CreateReport(const std::string& reporter_hash, const std::string
     };
 }
 
-json DBManager::GetModerationReports(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
+json DBManager::GetModerationReports(const std::string& actor_hash, const std::string& founder_session_cookie, int limit) {
     std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
         return {{"error", "Moderator authorization failed"}};
     }
 
@@ -2706,11 +2701,11 @@ json DBManager::GetModerationReports(const std::string& actor_hash, const std::s
     return {{"reports", items}};
 }
 
-json DBManager::GetModerationAudit(const std::string& actor_hash, const std::string& founder_session_hash, int limit) {
+json DBManager::GetModerationAudit(const std::string& actor_hash, const std::string& founder_session_cookie, int limit) {
     std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
         return {{"error", "Moderator authorization failed"}};
     }
 
@@ -2764,13 +2759,13 @@ json DBManager::GetModerationAudit(const std::string& actor_hash, const std::str
     return {{"events", items}};
 }
 
-json DBManager::ResolveModerationReport(const std::string& actor_hash, const std::string& founder_session_hash,
+json DBManager::ResolveModerationReport(const std::string& actor_hash, const std::string& founder_session_cookie,
                                         int64_t report_id, const std::string& status, const std::string& note) {
     std::lock_guard<decltype(mutex_)> lock(mutex_);
 
     const std::string actor = ResolveProfileHash(actor_hash);
     const std::string normalized_status = TrimCopy(status);
-    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_hash)) {
+    if (actor.empty() || !IsModeratorAuthorized(actor, founder_session_cookie)) {
         return {{"error", "Moderator authorization failed"}};
     }
     if (report_id <= 0) {

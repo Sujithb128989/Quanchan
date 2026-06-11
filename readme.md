@@ -48,6 +48,10 @@ QuanChan is not just an imageboard with PQC buzzwords added on top. The project 
 | 👥 Social layer | Friend requests, message requests, notifications, moderation reports |
 | 🖼️ Media | Uploads, image attachments, and encrypted DM image payloads |
 | 🔍 Runtime transparency | `/crypto`, `/api/crypto/status`, and `/api/crypto/tls-proof` |
+| 🪙 Crypto payments | Strictly validated NOWPayments IPN webhook integration supporting BTC, LTC, and XMR |
+| 💎 Dynamic tags | Character-length dynamically priced user badges with layout overflow cautionary alerts |
+| 👥 Group rooms | Circle Tier private cryptographic rooms with group key rotation and signature checks |
+| 🤖 Zero-knowledge AI | Hermes Tier ML-KEM-1024 hybrid encrypted AI completions (`/api/hermes/v1/chat/completions`) |
 | 🚀 Production deploy | Docker Compose deployment with fixed mounted origin certificates |
 
 ## Architecture

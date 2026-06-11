@@ -65,6 +65,7 @@ public:
                       const std::string& image_url, const std::string& encrypted_content,
                       const std::string& author_hash = "");
     void ArchiveThread(int64_t thread_id);
+    void StickyThread(int64_t thread_id);
 
     // Posts
     json CreatePost(int64_t thread_id, const std::string& content,

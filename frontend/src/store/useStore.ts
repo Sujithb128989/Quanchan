@@ -66,7 +66,11 @@ window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
                         pathname.startsWith('/api/friends/') ||
                         pathname.startsWith('/api/messages') ||
                         pathname.startsWith('/api/notifications') ||
-                        pathname === '/api/profile/select_tag';
+                        pathname.startsWith('/api/groups') ||
+                        pathname === '/api/profile/select_tag' ||
+                        pathname.startsWith('/api/payments/') ||
+                        pathname === '/api/interact' ||
+                        pathname === '/api/reports';
 
     if (isProtected) {
         const stored = localStorage.getItem('quanchan_identity');
@@ -207,8 +211,7 @@ interface LiveAppState extends AppState {
     unbanUser: (actorHash: string, banId: string) => Promise<any>;
     extendBan: (actorHash: string, banId: string, durationSeconds: number) => Promise<any>;
     selectTag: (hash: string, tag: string) => Promise<any>;
-    createPayment: (hash: string, tier: string, payCurrency: string) => Promise<any>;
-    simulatePaymentSuccess: (orderId: string) => Promise<any>;
+    createPayment: (hash: string, tier: string, payCurrency: string, customTagText?: string, threadId?: string) => Promise<any>;
     giftUser: (actorHash: string, targetHash: string, giftType: 'tag' | 'subscription', giftValue: string, durationDays: number) => Promise<any>;
 }
 
@@ -751,11 +754,17 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    createPayment: async (hash: string, tier: string, payCurrency: string) => {
+    createPayment: async (hash: string, tier: string, payCurrency: string, customTagText?: string, threadId?: string) => {
         const res = await fetch(`${API_BASE}/payments/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ actor_hash: hash, tier, pay_currency: payCurrency })
+            body: JSON.stringify({ 
+                actor_hash: hash, 
+                tier, 
+                pay_currency: payCurrency,
+                custom_tag_text: customTagText,
+                thread_id: threadId
+            })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -763,18 +772,7 @@ export const useStore = create<LiveAppState>((set, get) => ({
         }
         return data;
     },
-    simulatePaymentSuccess: async (orderId: string) => {
-        const res = await fetch(`${API_BASE}/payments/simulate_success`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_id: orderId })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            throw new Error(data?.error || 'Simulation failed');
-        }
-        return data;
-    },
+
     giftUser: async (actorHash: string, targetHash: string, giftType: 'tag' | 'subscription', giftValue: string, durationDays: number) => {
         const res = await fetch(`${API_BASE}/admin/gift`, {
             method: 'POST',
