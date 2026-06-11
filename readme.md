@@ -54,6 +54,34 @@ QuanChan is not just an imageboard with PQC buzzwords added on top. The project 
 | 🤖 Zero-knowledge AI | Hermes Tier ML-KEM-1024 hybrid encrypted AI completions (`/api/hermes/v1/chat/completions`) |
 | 🚀 Production deploy | Docker Compose deployment with fixed mounted origin certificates |
 
+## Recent Premium Features & Security Hardening
+
+QuanChan v1.1.0 escalates the platform to production-ready status for live users by integrating real-world cryptocurrency payments, private group communications, zero-knowledge AI integrations, and rigorous cryptographic defense hardening:
+
+### 1. Paid Premium Subscriptions (Circle & Hermes Tiers)
+* **Live Crypto Checkout**: Integrated with the **NOWPayments API** for live purchases of advanced roles. Supported payments are strictly limited to secure, censorship-resistant cryptocurrencies: Bitcoin (`BTC`), Litecoin (`LTC`), and Monero (`XMR`).
+* **Instant Payment Notifications (IPN)**: Webhook signature checks are strictly enforced using the secret IPN key on the backend. All sandbox payment simulation code paths and mock webhooks have been completely removed.
+* **Premium User Badges**: Active subscribers display tier-specific tags (`Circle` / `Hermes`) next to their usernames in thread posts and replies.
+
+### 2. Dynamic Custom Display Badges
+* **Custom Tag Generator**: Users can purchase personalized alphanumeric custom badges (max 6 characters).
+* **Length-Based Dynamic Pricing**: Badge cost is calculated dynamically in the frontend and verified backend-side (shorter tags like `OG` or `VIP` carry premium prices, e.g. $50, while longer tags are cheaper to optimize display space).
+* **Layout Safeguards**: The checkout UI features warning alerts indicating potential layout compromises for long tags, and the settings dashboard enables instant equipping/unequipping of unlocked tags.
+
+### 3. Private Group Messaging (Circle)
+* **What is a "Circle"?**: A Circle is a private, multi-user cryptographic group room that allows members to interact securely without exposing content to the hosting server.
+* **Cryptographic Key Rotation**: Built on a ratcheting key structure where group keys rotate automatically during membership updates (joins/leaves) and epoch bounds to ensure forward and backward secrecy.
+* **Access Control**: Limited strictly to authenticated accounts holding a valid Circle Tier subscription.
+
+### 4. Zero-Knowledge Hermes AI Completion
+* **Hybrid-Encrypted Completions**: A private, zero-knowledge chat completions API (`/api/hermes/v1/chat/completions`) for Hermes Tier subscribers.
+* **ML-KEM-1024 Wrapping**: Prompts and responses are hybrid-encrypted in-transit utilizing `ML-KEM-1024` keys, ensuring that neither intermediate proxies nor the host system can inspect or retain raw prompt/response histories.
+
+### 5. Production Security Hardening
+* **Double-Submit Cookie CSRF**: Replaced legacy CSRF check exclusions with a strict exact-path match and implemented double-submit cookie verification utilizing HTTP headers (`X-CSRF-Token`) and cookies (`csrf_token; SameSite=Strict`).
+* **URL Leak Prevention**: Eliminated security flaws where founder/session tokens were passed in query parameters or URL path targets. Session tracking is now securely locked to `HttpOnly; Secure; SameSite=Strict` cookies.
+* **Dilithium5 Authenticated Reports**: Secured the `/api/reports` endpoint with backend-verified Dilithium5 signatures to prevent anonymous identity hash spoofing and spam reporting.
+
 ## Architecture
 
 QuanChan splits responsibility across the browser, the backend, and the transport layer instead of pretending TLS alone solves the whole problem:

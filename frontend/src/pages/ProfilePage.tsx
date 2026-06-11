@@ -1186,6 +1186,127 @@ export default function ProfilePage() {
                             ))}
                         </div>
 
+                        {/* Inline Checkout Panel (No Overlays) */}
+                        {selectedProduct && (
+                            <div
+                                className="glass-card"
+                                style={{
+                                    border: '1px solid var(--cyan)',
+                                    borderRadius: '16px',
+                                    padding: '24px',
+                                    marginBottom: '24px',
+                                    background: 'rgba(17,17,17,0.3)',
+                                    boxShadow: '0 8px 32px rgba(0,230,230,0.15)',
+                                }}
+                            >
+                                <h3 className="text-lg font-bold" style={{ color: 'var(--text)', marginBottom: '8px' }}>
+                                    Purchase: {selectedProduct.name}
+                                </h3>
+                                <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', marginBottom: '20px' }}>
+                                    Amount Due: <span style={{ color: 'var(--cyan)', fontWeight: 'bold' }}>${selectedProduct.price.toFixed(2)} USD</span>
+                                </p>
+
+                                {!invoice ? (
+                                    <div>
+                                        <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                            Choose Payment Cryptocurrency
+                                        </label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '20px' }}>
+                                            {(['btc', 'ltc', 'xmr'] as const).map(curr => (
+                                                <button
+                                                    key={curr}
+                                                    onClick={() => setPayCurrency(curr)}
+                                                    style={{
+                                                        padding: '12px 8px',
+                                                        borderRadius: '8px',
+                                                        background: payCurrency === curr ? 'var(--surface-3)' : 'var(--surface-2)',
+                                                        border: payCurrency === curr ? '1px solid var(--cyan)' : '1px solid var(--border)',
+                                                        color: payCurrency === curr ? 'var(--cyan)' : 'var(--text)',
+                                                        textTransform: 'uppercase',
+                                                        fontWeight: 'bold',
+                                                        cursor: 'pointer',
+                                                    }}
+                                                >
+                                                    {curr}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        {paymentError && (
+                                            <p style={{ color: 'var(--red)', fontSize: '0.85rem', marginBottom: '12px' }}>{paymentError}</p>
+                                        )}
+
+                                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                            <button
+                                                onClick={() => setSelectedProduct(null)}
+                                                className="btn-v2"
+                                                style={{ padding: '10px 16px' }}
+                                                disabled={paymentLoading}
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                onClick={handleCreateInvoice}
+                                                className="btn-v2-accent"
+                                                style={{ padding: '10px 16px' }}
+                                                disabled={paymentLoading}
+                                            >
+                                                {paymentLoading ? 'Generating Invoice...' : 'Generate Invoice'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <div
+                                            style={{
+                                                padding: '16px',
+                                                borderRadius: '8px',
+                                                background: 'var(--surface-2)',
+                                                border: '1px dashed var(--border)',
+                                                marginBottom: '20px',
+                                            }}
+                                        >
+                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                                                Send exactly:
+                                            </p>
+                                            <p style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: 'bold', color: 'var(--text)', marginBottom: '12px' }}>
+                                                {invoice.pay_amount} <span style={{ textTransform: 'uppercase' }}>{invoice.pay_currency}</span>
+                                            </p>
+                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '4px' }}>
+                                                To Address:
+                                            </p>
+                                            <p
+                                                style={{
+                                                    fontSize: '0.78rem',
+                                                    fontFamily: 'var(--font-mono)',
+                                                    background: 'var(--surface-3)',
+                                                    padding: '8px 10px',
+                                                    borderRadius: '4px',
+                                                    wordBreak: 'break-all',
+                                                    color: 'var(--cyan)',
+                                                }}
+                                            >
+                                                {invoice.pay_address}
+                                            </p>
+                                        </div>
+
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button
+                                                onClick={() => {
+                                                    setSelectedProduct(null);
+                                                    setInvoice(null);
+                                                }}
+                                                className="btn-v2"
+                                                style={{ padding: '10px 16px' }}
+                                            >
+                                                Close Window
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', marginTop: '12px' }}>
                             <Crown size={16} style={{ color: 'var(--gold)' }} />
                             <h2 className="text-lg font-bold" style={{ color: 'var(--text)' }}>Custom Badges & Display Tags</h2>
@@ -1306,153 +1427,6 @@ export default function ProfilePage() {
                             </div>
                         </div>
                     </div>
-
-                    {/* Invoice Panel / Overlay */}
-                    {selectedProduct && (
-                        <div
-                            style={{
-                                position: 'fixed',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                zIndex: 100,
-                                background: 'rgba(0,0,0,0.6)',
-                                backdropFilter: 'blur(4px)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: '16px',
-                            }}
-                            onClick={() => {
-                                if (!paymentLoading) {
-                                    setSelectedProduct(null);
-                                    setInvoice(null);
-                                }
-                            }}
-                        >
-                            <div
-                                style={{
-                                    background: 'var(--surface-1)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: '16px',
-                                    padding: '24px',
-                                    maxWidth: '480px',
-                                    width: '100%',
-                                    boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
-                                }}
-                                onClick={e => e.stopPropagation()}
-                            >
-                                <h3 className="text-lg font-bold" style={{ color: 'var(--text)', marginBottom: '8px' }}>
-                                    Purchase: {selectedProduct.name}
-                                </h3>
-                                <p style={{ color: 'var(--text-dim)', fontSize: '0.9rem', marginBottom: '20px' }}>
-                                    Amount Due: <span style={{ color: 'var(--cyan)', fontWeight: 'bold' }}>${selectedProduct.price.toFixed(2)} USD</span>
-                                </p>
-
-                                {!invoice ? (
-                                    <div>
-                                        <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                            Choose Payment Cryptocurrency
-                                        </label>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '20px' }}>
-                                            {(['btc', 'ltc', 'xmr'] as const).map(curr => (
-                                                <button
-                                                    key={curr}
-                                                    onClick={() => setPayCurrency(curr)}
-                                                    style={{
-                                                        padding: '12px 8px',
-                                                        borderRadius: '8px',
-                                                        background: payCurrency === curr ? 'var(--surface-3)' : 'var(--surface-2)',
-                                                        border: payCurrency === curr ? '1px solid var(--cyan)' : '1px solid var(--border)',
-                                                        color: payCurrency === curr ? 'var(--cyan)' : 'var(--text)',
-                                                        textTransform: 'uppercase',
-                                                        fontWeight: 'bold',
-                                                        cursor: 'pointer',
-                                                    }}
-                                                >
-                                                    {curr}
-                                                </button>
-                                            ))}
-                                        </div>
-
-                                        {paymentError && (
-                                            <p style={{ color: 'var(--red)', fontSize: '0.85rem', marginBottom: '12px' }}>{paymentError}</p>
-                                        )}
-
-                                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                            <button
-                                                onClick={() => setSelectedProduct(null)}
-                                                className="btn-v2"
-                                                style={{ padding: '10px 16px' }}
-                                                disabled={paymentLoading}
-                                            >
-                                                Cancel
-                                            </button>
-                                            <button
-                                                onClick={handleCreateInvoice}
-                                                className="btn-v2-accent"
-                                                style={{ padding: '10px 16px' }}
-                                                disabled={paymentLoading}
-                                            >
-                                                {paymentLoading ? 'Generating Invoice...' : 'Generate Invoice'}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div>
-                                        <div
-                                            style={{
-                                                padding: '16px',
-                                                borderRadius: '8px',
-                                                background: 'var(--surface-2)',
-                                                border: '1px dashed var(--border)',
-                                                marginBottom: '20px',
-                                            }}
-                                        >
-                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '4px' }}>
-                                                Send exactly:
-                                            </p>
-                                            <p style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: 'bold', color: 'var(--text)', marginBottom: '12px' }}>
-                                                {invoice.pay_amount} <span style={{ textTransform: 'uppercase' }}>{invoice.pay_currency}</span>
-                                            </p>
-                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '4px' }}>
-                                                To Address:
-                                            </p>
-                                            <p
-                                                style={{
-                                                    fontSize: '0.78rem',
-                                                    fontFamily: 'var(--font-mono)',
-                                                    background: 'var(--surface-3)',
-                                                    padding: '8px 10px',
-                                                    borderRadius: '4px',
-                                                    wordBreak: 'break-all',
-                                                    color: 'var(--cyan)',
-                                                }}
-                                            >
-                                                {invoice.pay_address}
-                                            </p>
-                                        </div>
-
-
-
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button
-                                                onClick={() => {
-                                                    setSelectedProduct(null);
-                                                    setInvoice(null);
-                                                }}
-                                                className="btn-v2"
-                                                style={{ padding: '10px 16px' }}
-                                            >
-                                                Close Window
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
                 </div>
             )}
         </motion.div>
